@@ -144,8 +144,12 @@ class App(ctk.CTk):
         self._t2_show_done   = tk.BooleanVar(value=False)
 
         # Tab 2 collapsible state
-        self._t2_collapsed_proj = set()
-        self._t2_collapsed_goal = set()
+        # projects: expanded by default (collapsed if in set)
+        # goals:    collapsed by default (expanded if in set)
+        self._t2_collapsed_proj  = set()
+        self._t2_expanded_goal   = set()
+        self._t2_pending_add_task = None   # (proj, goal) tuple
+        self._t2_pending_add_goal = None   # proj string
 
         # Tab 1 add-goal form
         self._t1g_project = tk.StringVar(value="")
@@ -603,36 +607,11 @@ class App(ctk.CTk):
         self._mode_bar(f, self._on_t2_mode_change)
 
         # ── Filter bar ────────────────────────────────────────────────────────
-        work_mode = self._work_mode.get()
         fbar = tk.Frame(f, bg="#f8f8ff", bd=1, relief="flat")
         fbar.pack(fill="x", padx=8, pady=(0, 6))
 
-        all_projs    = self._all_projects(work_mode if work_mode else None)
-        proj_choices = ["All"] + all_projs
-        tk.Label(fbar, text="Project:", bg="#f8f8ff",
-                 font=("Helvetica", 10)).pack(side="left", padx=(10, 4), pady=6)
-        proj_cb = ttk.Combobox(fbar, values=proj_choices, width=16,
-                               textvariable=self._t2_proj_filter, state="readonly")
-        proj_cb.pack(side="left", padx=(0, 12), pady=6)
-        proj_cb.bind("<<ComboboxSelected>>", lambda _: self._on_t2_proj_change())
-
-        sel_proj  = self._t2_proj_filter.get()
-        goal_pool = (self._goals_for_project(sel_proj, work_mode if work_mode else None)
-                     if sel_proj != "All"
-                     else self._all_goals(work_mode if work_mode else None))
-        goal_choices = ["All"] + goal_pool
-        if self._t2_goal_filter.get() not in goal_choices:
-            self._t2_goal_filter.set("All")
-
-        tk.Label(fbar, text="Goal:", bg="#f8f8ff",
-                 font=("Helvetica", 10)).pack(side="left", padx=(0, 4), pady=6)
-        goal_cb = ttk.Combobox(fbar, values=goal_choices, width=18,
-                               textvariable=self._t2_goal_filter, state="readonly")
-        goal_cb.pack(side="left", padx=(0, 12), pady=6)
-        goal_cb.bind("<<ComboboxSelected>>", lambda _: self._build_tab2())
-
         tk.Label(fbar, text="Priority:", bg="#f8f8ff",
-                 font=("Helvetica", 10)).pack(side="left", padx=(0, 4), pady=6)
+                 font=("Helvetica", 10)).pack(side="left", padx=(10, 4), pady=6)
         pri_cb = ttk.Combobox(fbar, values=["All"] + PRIORITIES, width=10,
                               textvariable=self._t2_pri_filter, state="readonly")
         pri_cb.pack(side="left", padx=(0, 12), pady=6)
@@ -642,69 +621,33 @@ class App(ctk.CTk):
                        bg="#f8f8ff", command=self._build_tab2).pack(
                        side="left", padx=(0, 10), pady=6)
 
-        # ── Two-panel layout ──────────────────────────────────────────────────
-        panels = tk.Frame(f, bg="white")
-        panels.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        # ── "+ New Project" button ────────────────────────────────────────────
+        top = tk.Frame(f, bg="white")
+        top.pack(fill="x", padx=8, pady=(0, 4))
+        self._btn(top, "+ New Project", "#28a745",
+                  lambda: self._inline_add_project(f)).pack(side="left")
 
-        # Left: collapsible task browser
-        left = tk.Frame(panels, bg="white")
-        left.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        # ── Tree ──────────────────────────────────────────────────────────────
+        work_mode = self._work_mode.get()
+        show_done = self._t2_show_done.get()
+        pri_val   = self._t2_pri_filter.get()
 
-        # Right: "Select for Today" sidebar
-        right = tk.Frame(panels, bg="#f5f4ff", bd=1, relief="flat")
-        right.pack(side="right", fill="y", ipadx=4)
+        all_tasks = load_tasks()
+        if work_mode:
+            all_tasks = [t for t in all_tasks if t.get("is_work", 1) == 1]
 
-        df = self._filtered_tasks()
+        projects = sorted(set(t["impact_project"] for t in all_tasks
+                              if t["impact_project"]))
 
-        # ── Left: collapsible project → goal → task list ──────────────────────
-        if not df:
-            tk.Label(left, text="No tasks match the current filters.",
-                     bg="white", fg="#888").pack(pady=12)
+        if not projects:
+            tk.Label(f,
+                     text="No projects yet. Click '+ New Project' to get started.",
+                     bg="white", fg="#888",
+                     font=("Helvetica", 11)).pack(pady=20)
         else:
-            for proj in sorted(set(t["impact_project"] for t in df)):
-                pt = [t for t in df if t["impact_project"] == proj]
-                self._render_proj_group(left, proj, pt)
-
-        # ── Right: Select for Today sidebar ───────────────────────────────────
-        tk.Label(right, text="Select for Today",
-                 font=("Helvetica", 11, "bold"), fg=PURPLE,
-                 bg="#f5f4ff").pack(anchor="w", padx=10, pady=(10, 4))
-        tk.Frame(right, bg=PURPLE, height=2).pack(fill="x", padx=10, pady=(0, 6))
-
-        if df:
-            for proj in sorted(set(t["impact_project"] for t in df)):
-                pt = [t for t in df if t["impact_project"] == proj]
-                tk.Label(right, text=proj,
-                         font=("Helvetica", 10, "bold"), fg=PURPLE,
-                         bg="#f5f4ff").pack(anchor="w", padx=10, pady=(8, 2))
-                for goal in sorted(set(t["goal"] for t in pt)):
-                    gt = [t for t in pt if t["goal"] == goal]
-                    tk.Label(right, text=f"  {goal}",
-                             font=("Helvetica", 9, "italic"), fg="#666",
-                             bg="#f5f4ff").pack(anchor="w", padx=10)
-                    for t in gt:
-                        trow = tk.Frame(right, bg="#f5f4ff")
-                        trow.pack(fill="x", padx=10, pady=1)
-                        var = tk.BooleanVar(value=(t["id"] in self._today_sel))
-                        col = ("#aaa" if t["task_completed"]
-                               else PRI_COLOR.get(t["priority"], "#333"))
-                        def _on(tid=t["id"], v=var):
-                            if v.get(): self._today_sel.add(tid)
-                            else:       self._today_sel.discard(tid)
-                        self._pri_dot(trow, t["priority"], bg="#f5f4ff")
-                        tk.Checkbutton(
-                            trow, text=t["task"],
-                            variable=var, command=_on,
-                            bg="#f5f4ff", fg=col, activebackground="#f5f4ff",
-                            font=("Helvetica", 9), wraplength=200, justify="left"
-                        ).pack(side="left")
-        else:
-            tk.Label(right, text="No tasks to show.",
-                     fg="#aaa", bg="#f5f4ff",
-                     font=("Helvetica", 9)).pack(padx=10, pady=8)
-
-        self._btn(right, "Confirm Selected →", PURPLE,
-                  self._confirm_today).pack(pady=12, padx=10, fill="x")
+            for proj in projects:
+                proj_tasks = [t for t in all_tasks if t["impact_project"] == proj]
+                self._render_proj_group(f, proj, proj_tasks, show_done, pri_val)
 
     def _toggle_proj(self, proj):
         if proj in self._t2_collapsed_proj:
@@ -714,57 +657,122 @@ class App(ctk.CTk):
         self._build_tab2()
 
     def _toggle_goal(self, key):
-        if key in self._t2_collapsed_goal:
-            self._t2_collapsed_goal.discard(key)
+        if key in self._t2_expanded_goal:
+            self._t2_expanded_goal.discard(key)
         else:
-            self._t2_collapsed_goal.add(key)
+            self._t2_expanded_goal.add(key)
         self._build_tab2()
 
-    def _render_proj_group(self, parent, proj, tasks):
+    def _render_proj_group(self, parent, proj, all_proj_tasks, show_done, pri_val):
         is_collapsed = proj in self._t2_collapsed_proj
 
-        # Flat project header: purple accent bar + clickable label
+        task_count = sum(1 for t in all_proj_tasks if t["task"])
+        done_count = sum(1 for t in all_proj_tasks
+                         if t["task"] and t["task_completed"])
+        count_str  = f"  ({done_count}/{task_count})" if task_count else ""
+
         hdr = tk.Frame(parent, bg="white")
-        hdr.pack(fill="x", pady=(10, 0))
+        hdr.pack(fill="x", pady=(10, 0), padx=8)
         tk.Frame(hdr, bg=PURPLE, width=4).pack(side="left", fill="y")
-        arrow = "▶" if is_collapsed else "▼"
-        tk.Button(hdr, text=f"   {arrow}   {proj}",
-                  font=("Helvetica", 12, "bold"), fg=PURPLE,
-                  bg="white", relief="flat", anchor="w",
-                  cursor="hand2", activebackground="#f0f0ff",
-                  command=lambda p=proj: self._toggle_proj(p)).pack(
-                  side="left", fill="x", expand=True, ipady=5)
+
+        arrow    = "▶" if is_collapsed else "▼"
+        name_btn = tk.Button(hdr, text=f"   {arrow}   {proj}{count_str}",
+                             font=("Helvetica", 12, "bold"), fg=PURPLE,
+                             bg="white", relief="flat", anchor="w",
+                             cursor="hand2", activebackground="#f0f0ff",
+                             command=lambda p=proj: self._toggle_proj(p))
+        name_btn.pack(side="left", fill="x", expand=True, ipady=5)
+        name_btn.bind("<Double-Button-1>",
+                      lambda e, b=name_btn, p=proj: self._start_rename_proj(b, p))
+
+        tk.Frame(parent, bg="#e8e0ff", height=1).pack(fill="x", padx=8)
 
         if is_collapsed:
+            self._btn(hdr, "Rename", "#999",
+                      lambda b=name_btn, p=proj: self._start_rename_proj(b, p),
+                      width=6).pack(side="right", padx=(0, 8))
             return
 
         content = tk.Frame(parent, bg="white")
-        content.pack(fill="x", padx=(20, 0), pady=(2, 0))
+        content.pack(fill="x", padx=(28, 8), pady=(0, 4))
 
-        for goal in sorted(set(t["goal"] for t in tasks)):
-            gt  = [t for t in tasks if t["goal"] == goal]
-            key = f"{proj}::{goal}"
-            goal_collapsed = key in self._t2_collapsed_goal
+        self._btn(hdr, "+ Goal", "#28a745",
+                  lambda c=content, p=proj: self._inline_add_goal(c, p),
+                  width=6).pack(side="right", padx=(0, 8))
+        self._btn(hdr, "Rename", "#999",
+                  lambda b=name_btn, p=proj: self._start_rename_proj(b, p),
+                  width=6).pack(side="right", padx=(0, 4))
 
-            # Goal subheader: grey accent bar + clickable label
-            g_hdr = tk.Frame(content, bg="white")
-            g_hdr.pack(fill="x", pady=(6, 0))
-            tk.Frame(g_hdr, bg="#bbb", width=2).pack(side="left", fill="y")
-            g_arrow = "▶" if goal_collapsed else "▼"
-            tk.Button(g_hdr, text=f"   {g_arrow}   {goal}",
-                      font=("Helvetica", 10, "bold"), fg="#444",
-                      bg="white", relief="flat", anchor="w",
-                      cursor="hand2", activebackground="#f8f8ff",
-                      command=lambda k=key: self._toggle_goal(k)).pack(
-                      side="left", fill="x", expand=True, ipady=3)
+        goals = sorted(set(t["goal"] for t in all_proj_tasks if t["goal"]))
+        for goal in goals:
+            goal_tasks = [t for t in all_proj_tasks if t["goal"] == goal]
+            self._render_goal_group(content, proj, goal, goal_tasks,
+                                    show_done, pri_val)
 
-            if goal_collapsed:
-                continue
+        if self._t2_pending_add_goal == proj:
+            self._t2_pending_add_goal = None
+            self._inline_add_goal(content, proj)
 
-            tasks_frame = tk.Frame(content, bg="white")
-            tasks_frame.pack(fill="x", padx=(16, 0))
-            for t in gt:
-                self._render_task_row_t2(tasks_frame, t)
+    def _render_goal_group(self, parent, proj, goal, all_goal_tasks,
+                           show_done, pri_val):
+        key         = f"{proj}::{goal}"
+        is_expanded = key in self._t2_expanded_goal
+
+        task_count = sum(1 for t in all_goal_tasks if t["task"])
+        done_count = sum(1 for t in all_goal_tasks
+                         if t["task"] and t["task_completed"])
+        count_str  = f"  ({done_count}/{task_count})" if task_count else ""
+
+        hdr = tk.Frame(parent, bg="white")
+        hdr.pack(fill="x", pady=(6, 0))
+        tk.Frame(hdr, bg="#bbb", width=2).pack(side="left", fill="y")
+
+        arrow    = "▼" if is_expanded else "▶"
+        name_btn = tk.Button(hdr, text=f"   {arrow}   {goal}{count_str}",
+                             font=("Helvetica", 10, "bold"), fg="#444",
+                             bg="white", relief="flat", anchor="w",
+                             cursor="hand2", activebackground="#f8f8ff",
+                             command=lambda k=key: self._toggle_goal(k))
+        name_btn.pack(side="left", fill="x", expand=True, ipady=3)
+        name_btn.bind("<Double-Button-1>",
+                      lambda e, b=name_btn, p=proj, g=goal:
+                      self._start_rename_goal(b, p, g))
+
+        if is_expanded:
+            content = tk.Frame(parent, bg="white")
+            content.pack(fill="x", padx=(20, 0), pady=(2, 0))
+
+            self._btn(hdr, "+ Task", "#28a745",
+                      lambda c=content, p=proj, g=goal:
+                      self._inline_add_task(c, p, g),
+                      width=6).pack(side="right", padx=(0, 4))
+            self._btn(hdr, "Edit", "#999",
+                      lambda b=name_btn, p=proj, g=goal:
+                      self._start_rename_goal(b, p, g),
+                      width=4).pack(side="right", padx=(0, 4))
+
+            display_tasks = [t for t in all_goal_tasks if t["task"]]
+            if not show_done:
+                display_tasks = [t for t in display_tasks
+                                 if not t["task_completed"]]
+            if pri_val != "All":
+                display_tasks = [t for t in display_tasks
+                                 if t["priority"] == pri_val]
+
+            for t in display_tasks:
+                self._render_task_row_t2(content, t)
+
+            if self._t2_pending_add_task == (proj, goal):
+                self._t2_pending_add_task = None
+                self._inline_add_task(content, proj, goal)
+        else:
+            self._btn(hdr, "+ Task", "#28a745",
+                      lambda p=proj, g=goal: self._expand_and_add_task(p, g),
+                      width=6).pack(side="right", padx=(0, 4))
+            self._btn(hdr, "Edit", "#999",
+                      lambda b=name_btn, p=proj, g=goal:
+                      self._start_rename_goal(b, p, g),
+                      width=4).pack(side="right", padx=(0, 4))
 
     def _render_task_row_t2(self, parent, t):
         bg = "white"
@@ -783,15 +791,33 @@ class App(ctk.CTk):
         label = t["task"]
         if t.get("due_date"):
             label += f"  📅 {t['due_date']}"
-        tk.Label(row, text=label, fg=col, bg=bg,
-                 font=font_style, anchor="w").pack(side="left", fill="x", expand=True)
+        task_lbl = tk.Label(row, text=label, fg=col, bg=bg,
+                            font=font_style, anchor="w", cursor="hand2")
+        task_lbl.pack(side="left", fill="x", expand=True)
+        task_lbl.bind("<Double-Button-1>",
+                      lambda e, tid=t["id"], o=outer:
+                      self._open_inline_edit(tid, o))
         self._work_badge(row, bool(t.get("is_work", 1)), bg=bg)
 
+        # Today toggle — green when active, grey when not
+        is_today   = (t.get("selected_today") == 1
+                      and t.get("selected_date") == TODAY)
+        today_bg   = "#28a745" if is_today else "#bbb"
+        today_text = "✓ Today" if is_today else "+ Today"
+        tk.Button(row, text=today_text, bg=today_bg, fg="white",
+                  relief="flat", font=("Helvetica", 9), padx=6, pady=2,
+                  cursor="hand2", activeforeground="white",
+                  activebackground=today_bg,
+                  command=lambda tid=t["id"]: self._toggle_today(tid)).pack(
+                  side="right", padx=(4, 0))
+
         self._btn(row, "Del", "#dc3545",
-                  lambda tid=t["id"], n=t["task"]: self._delete_task_inline(tid, n),
+                  lambda tid=t["id"], n=t["task"]:
+                  self._delete_task_inline(tid, n),
                   width=3).pack(side="right", padx=(4, 0))
         self._btn(row, "Edit", "#e07b00",
-                  lambda tid=t["id"], o=outer: self._open_inline_edit(tid, o),
+                  lambda tid=t["id"], o=outer:
+                  self._open_inline_edit(tid, o),
                   width=4).pack(side="right", padx=(4, 0))
 
         if t.get("notes"):
@@ -806,7 +832,6 @@ class App(ctk.CTk):
             self._build_tab2()
 
     def _open_inline_edit(self, task_id, container):
-        # Toggle: if an edit panel already exists in this row, close it
         for w in container.winfo_children():
             if getattr(w, "_inline_edit", False):
                 w.destroy()
@@ -896,13 +921,256 @@ class App(ctk.CTk):
                   lambda: panel.destroy()).pack(side="right", padx=(6, 0))
         self._btn(btn_row, "Save", PURPLE, save).pack(side="right")
 
+    def _toggle_today(self, task_id):
+        t = next((x for x in load_tasks() if x["id"] == task_id), None)
+        if t is None:
+            return
+        if t.get("selected_today") == 1 and t.get("selected_date") == TODAY:
+            db_exec(f"UPDATE {TABLE} SET selected_today=0 WHERE id=?", (task_id,))
+        else:
+            db_exec(
+                f"UPDATE {TABLE} SET selected_today=1,selected_date=? WHERE id=?",
+                (TODAY, task_id))
+        self._build_tab2()
+
+    def _expand_and_add_task(self, proj, goal):
+        key = f"{proj}::{goal}"
+        self._t2_expanded_goal.add(key)
+        self._t2_pending_add_task = (proj, goal)
+        self._build_tab2()
+
+    def _start_rename_proj(self, btn, proj):
+        parent = btn.master
+        btn.pack_forget()
+        e = tk.Entry(parent, font=("Helvetica", 12, "bold"),
+                     fg=PURPLE, bg="white", relief="flat",
+                     highlightthickness=1, highlightcolor=PURPLE,
+                     highlightbackground="#aaa")
+        e.insert(0, proj)
+        e.select_range(0, "end")
+        e.pack(side="left", fill="x", expand=True, ipady=5)
+        e.focus()
+
+        def save(event=None):
+            new = e.get().strip()
+            if new and new != proj:
+                db_exec(
+                    f"UPDATE {TABLE} SET impact_project=? WHERE impact_project=?",
+                    (new, proj))
+            e.destroy()
+            self._build_tab2()
+
+        e.bind("<Return>", save)
+        e.bind("<Escape>", lambda ev: (e.destroy(), self._build_tab2()))
+        e.bind("<FocusOut>", save)
+
+    def _start_rename_goal(self, btn, proj, goal):
+        parent = btn.master
+        btn.pack_forget()
+        e = tk.Entry(parent, font=("Helvetica", 10, "bold"),
+                     fg="#444", bg="white", relief="flat",
+                     highlightthickness=1, highlightcolor=PURPLE,
+                     highlightbackground="#aaa")
+        e.insert(0, goal)
+        e.select_range(0, "end")
+        e.pack(side="left", fill="x", expand=True, ipady=3)
+        e.focus()
+
+        def save(event=None):
+            new = e.get().strip()
+            if new and new != goal:
+                db_exec(
+                    f"UPDATE {TABLE} SET goal=? WHERE goal=? AND impact_project=?",
+                    (new, goal, proj))
+            e.destroy()
+            self._build_tab2()
+
+        e.bind("<Return>", save)
+        e.bind("<Escape>", lambda ev: (e.destroy(), self._build_tab2()))
+        e.bind("<FocusOut>", save)
+
+    def _inline_add_project(self, parent_frame):
+        for w in parent_frame.winfo_children():
+            if getattr(w, "_inline_add_proj", False):
+                w.destroy()
+                return
+
+        panel = tk.Frame(parent_frame, bg="#e8ffe8", bd=1, relief="flat")
+        panel._inline_add_proj = True
+        panel.pack(fill="x", padx=8, pady=(0, 6))
+
+        row = tk.Frame(panel, bg="#e8ffe8")
+        row.pack(fill="x", padx=10, pady=8)
+
+        tk.Label(row, text="Project:", bg="#e8ffe8",
+                 font=("Helvetica", 10)).pack(side="left", padx=(0, 4))
+        e_proj = tk.Entry(row, width=18, relief="flat", highlightthickness=1,
+                          highlightbackground="#ccc", highlightcolor=PURPLE,
+                          bg="white")
+        e_proj.pack(side="left", padx=(0, 10), ipady=3)
+        e_proj.focus()
+
+        tk.Label(row, text="First Goal:", bg="#e8ffe8",
+                 font=("Helvetica", 10)).pack(side="left", padx=(0, 4))
+        e_goal = tk.Entry(row, width=18, relief="flat", highlightthickness=1,
+                          highlightbackground="#ccc", highlightcolor=PURPLE,
+                          bg="white")
+        e_goal.pack(side="left", padx=(0, 10), ipady=3)
+
+        is_work_var = tk.BooleanVar(value=True)
+        self._work_toggle(row, is_work_var, bg="#e8ffe8").pack(
+            side="left", padx=(0, 10))
+
+        def save(event=None):
+            pname = e_proj.get().strip()
+            gname = e_goal.get().strip()
+            if not pname or not gname:
+                messagebox.showwarning("Missing",
+                                       "Enter both a project name and a first goal.")
+                return
+            is_work = 1 if is_work_var.get() else 0
+            db_exec(
+                f"INSERT INTO {TABLE} (impact_project,goal,task_completed,"
+                f"selected_today,priority,time_spent,is_work)"
+                f" VALUES(?,?,0,0,'Medium',0,?)",
+                (pname, gname, is_work))
+            panel.destroy()
+            self._build_tab2()
+
+        self._btn(row, "Create", "#28a745", save).pack(side="left", padx=(0, 4))
+        self._btn(row, "Cancel", "#888",
+                  lambda: panel.destroy()).pack(side="left")
+        e_proj.bind("<Return>", lambda ev: e_goal.focus())
+        e_goal.bind("<Return>", save)
+        e_goal.bind("<Escape>", lambda ev: panel.destroy())
+
+    def _inline_add_goal(self, container, proj):
+        for w in container.winfo_children():
+            if getattr(w, "_inline_add_goal", False):
+                w.destroy()
+                return
+
+        panel = tk.Frame(container, bg="#e8ffe8", bd=1, relief="flat")
+        panel._inline_add_goal = True
+        panel.pack(fill="x", pady=4)
+
+        row = tk.Frame(panel, bg="#e8ffe8")
+        row.pack(fill="x", padx=8, pady=6)
+
+        tk.Label(row, text="Goal name:", bg="#e8ffe8",
+                 font=("Helvetica", 10)).pack(side="left", padx=(0, 4))
+        e = tk.Entry(row, width=28, relief="flat", highlightthickness=1,
+                     highlightbackground="#ccc", highlightcolor=PURPLE, bg="white")
+        e.pack(side="left", padx=(0, 10), ipady=3)
+        e.focus()
+
+        is_work_var = tk.BooleanVar(value=self._is_work_for_proj(proj))
+        self._work_toggle(row, is_work_var, bg="#e8ffe8").pack(
+            side="left", padx=(0, 10))
+
+        def save(event=None):
+            name = e.get().strip()
+            if not name:
+                panel.destroy(); return
+            if any(t["impact_project"] == proj and t["goal"] == name
+                   for t in load_tasks()):
+                messagebox.showwarning("Duplicate", "This goal already exists.")
+                return
+            is_work = 1 if is_work_var.get() else 0
+            db_exec(
+                f"INSERT INTO {TABLE} (impact_project,goal,task_completed,"
+                f"selected_today,priority,time_spent,is_work)"
+                f" VALUES(?,?,0,0,'Medium',0,?)",
+                (proj, name, is_work))
+            panel.destroy()
+            self._build_tab2()
+
+        self._btn(row, "Add Goal", "#28a745", save).pack(side="left", padx=(0, 4))
+        self._btn(row, "Cancel", "#888",
+                  lambda: panel.destroy()).pack(side="left")
+        e.bind("<Return>", save)
+        e.bind("<Escape>", lambda ev: panel.destroy())
+
+    def _inline_add_task(self, container, proj, goal):
+        for w in container.winfo_children():
+            if getattr(w, "_inline_add_task", False):
+                w.destroy()
+                return
+
+        is_work = 1 if self._is_work_for_goal(goal) else 0
+
+        panel = tk.Frame(container, bg="#e8ffe8", bd=1, relief="flat")
+        panel._inline_add_task = True
+        panel.pack(fill="x", pady=4)
+
+        grid = tk.Frame(panel, bg="#e8ffe8")
+        grid.pack(fill="x", padx=8, pady=8)
+
+        for ci, h in enumerate(["Task", "Priority", "Due Date", "Notes"]):
+            tk.Label(grid, text=h, bg="#e8ffe8",
+                     font=("Helvetica", 9)).grid(
+                     row=0, column=ci, sticky="w", padx=(0, 8), pady=(0, 2))
+
+        def _ientry(width):
+            return tk.Entry(grid, width=width, relief="flat",
+                            highlightthickness=1,
+                            highlightbackground="#ccc", highlightcolor=PURPLE,
+                            bg="white")
+
+        e_task = _ientry(28)
+        e_task.grid(row=1, column=0, padx=(0, 8), ipady=3)
+        e_task.focus()
+
+        e_pri = ttk.Combobox(grid, values=PRIORITIES, state="readonly", width=10)
+        e_pri.current(1)
+        e_pri.grid(row=1, column=1, padx=(0, 8))
+
+        e_due = _ientry(13)
+        e_due.grid(row=1, column=2, padx=(0, 8), ipady=3)
+
+        e_notes = _ientry(22)
+        e_notes.grid(row=1, column=3, padx=(0, 8), ipady=3)
+
+        btn_row = tk.Frame(panel, bg="#e8ffe8")
+        btn_row.pack(anchor="e", padx=8, pady=(0, 6))
+
+        def save(event=None):
+            task = e_task.get().strip()
+            if not task:
+                panel.destroy(); return
+            due_raw = e_due.get().strip()
+            if due_raw:
+                try:
+                    date.fromisoformat(due_raw)
+                except ValueError:
+                    messagebox.showwarning("Invalid date",
+                                           "Due Date must be YYYY-MM-DD")
+                    return
+            notes = e_notes.get().strip() or None
+            db_exec(
+                f"INSERT INTO {TABLE} (impact_project,goal,task,task_completed,"
+                f"selected_today,priority,time_spent,is_work,"
+                f"due_date,created_date,notes)"
+                f" VALUES(?,?,?,0,0,?,0,?,?,?,?)",
+                (proj, goal, task, e_pri.get(), is_work,
+                 due_raw or None, str(date.today()), notes))
+            panel.destroy()
+            self._build_tab2()
+
+        self._btn(btn_row, "Cancel", "#888",
+                  lambda: panel.destroy()).pack(side="right", padx=(6, 0))
+        self._btn(btn_row, "Add Task", "#28a745", save).pack(side="right")
+        e_task.bind("<Return>", save)
+        e_task.bind("<Escape>", lambda ev: panel.destroy())
+
+    def _is_work_for_proj(self, proj):
+        row = next((t for t in load_tasks() if t["impact_project"] == proj), None)
+        return bool(row.get("is_work", 1)) if row else True
+
     def _on_t2_mode_change(self):
-        self._t2_proj_filter.set("All")
-        self._t2_goal_filter.set("All")
         self._build_tab2()
 
     def _on_t2_proj_change(self):
-        self._t2_goal_filter.set("All")
         self._build_tab2()
 
     # ── Tab 2 helpers ─────────────────────────────────────────────────────────
