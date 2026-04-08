@@ -787,7 +787,6 @@ class App(ctk.CTk):
     def _delete_task_inline(self, task_id, name):
         if messagebox.askyesno("Delete", f"Delete '{name}'? Cannot be undone."):
             db_exec(f"DELETE FROM {TABLE} WHERE id=?", (task_id,))
-            self._today_sel.discard(task_id)
             self._build_tab2()
 
     def _open_inline_edit(self, task_id, container):
