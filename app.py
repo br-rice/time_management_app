@@ -133,15 +133,11 @@ class App(ctk.CTk):
         self._after_id     = None
         self._timer_label  = None
 
-        self._today_sel = set()
-
         self._work_mode = tk.BooleanVar(value=True)
 
         # Tab 2 filters
-        self._t2_pri_filter  = tk.StringVar(value="All")
-        self._t2_proj_filter = tk.StringVar(value="All")
-        self._t2_goal_filter = tk.StringVar(value="All")
-        self._t2_show_done   = tk.BooleanVar(value=False)
+        self._t2_pri_filter = tk.StringVar(value="All")
+        self._t2_show_done  = tk.BooleanVar(value=False)
 
         # Tab 2 collapsible state
         # projects: expanded by default (collapsed if in set)
@@ -331,44 +327,7 @@ class App(ctk.CTk):
         row = next((t for t in load_tasks() if t["goal"] == goal), None)
         return bool(row.get("is_work", 1)) if row else True
 
-    def _filtered_tasks(self):
-        """Return tasks filtered by all active Tab 2 settings."""
-        tasks     = load_tasks()
-        work_mode = self._work_mode.get()
-        pri_val   = self._t2_pri_filter.get()
-        proj_val  = self._t2_proj_filter.get()
-        goal_val  = self._t2_goal_filter.get()
-        show_done = self._t2_show_done.get()
 
-        df = [t for t in tasks if t["task"]]
-        if work_mode:
-            df = [t for t in df if t.get("is_work", 1) == 1]
-        if not show_done:
-            df = [t for t in df if not t["task_completed"]]
-        if pri_val != "All":
-            df = [t for t in df if t["priority"] == pri_val]
-        if proj_val != "All":
-            df = [t for t in df if t["impact_project"] == proj_val]
-        if goal_val != "All":
-            df = [t for t in df if t["goal"] == goal_val]
-        return df
-
-    def _refresh_tree(self):
-        if not hasattr(self, "tree"):
-            return
-        self.tree.delete(*self.tree.get_children())
-        for t in self._filtered_tasks():
-            self.tree.insert("", "end", iid=str(t["id"]), values=(
-                t["id"],
-                t["task"],
-                t["goal"],
-                t["impact_project"],
-                t["priority"],
-                "Work" if t.get("is_work", 1) else "Non-work",
-                t.get("due_date") or "",
-                t.get("created_date") or "",
-                "Yes" if t["task_completed"] else "No",
-                t["notes"] or ""))
 
     # ── Tab 1: Add Tasks ──────────────────────────────────────────────────────
 
@@ -1216,18 +1175,6 @@ class App(ctk.CTk):
                 (new, proj, is_w, old))
             self._build_tab2()
 
-    def _confirm_today(self):
-        if not self._today_sel:
-            messagebox.showwarning("Nothing selected", "Tick some tasks first."); return
-        for tid in self._today_sel:
-            db_exec(
-                f"UPDATE {TABLE} SET selected_today=1,selected_date=? WHERE id=?",
-                (TODAY, tid))
-        n = len(self._today_sel)
-        self._today_sel.clear()
-        messagebox.showinfo("Done", f"{n} task(s) added to today's list!")
-        self._build_tab2()
-
     # ── Tab 3: Tasks for Today ────────────────────────────────────────────────
 
     def _build_tab3(self):
@@ -1248,8 +1195,8 @@ class App(ctk.CTk):
             tk.Label(f, text="No tasks selected for today.",
                      font=("Helvetica", 13), bg="white").pack(pady=20)
             tk.Label(f,
-                     text="Go to 'My Tasks', check tasks, then click "
-                          "'Confirm Selected for Today'.",
+                     text="Go to 'My Tasks', expand a goal, "
+                          "and click '+ Today' on tasks you want to work on.",
                      fg="#888", bg="white").pack()
         else:
             projects   = sorted(set(t["impact_project"] for t in tasks))
