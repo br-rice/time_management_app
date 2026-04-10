@@ -671,14 +671,17 @@ class App(ctk.CTk):
     # ── List view ──────────────────────────────────────────────────────────────
 
     def _render_list_view(self, parent, all_tasks, projects,
-                          expand_all, show_done, pri_val, rebuild_fn):
+                          expand_all, show_done, pri_val, rebuild_fn,
+                          readonly=False):
         for proj in projects:
             proj_tasks = [t for t in all_tasks if t["impact_project"] == proj]
             self._render_list_proj(parent, proj, proj_tasks,
-                                   expand_all, show_done, pri_val, rebuild_fn)
+                                   expand_all, show_done, pri_val, rebuild_fn,
+                                   readonly=readonly)
 
     def _render_list_proj(self, parent, proj, all_proj_tasks,
-                          expand_all, show_done, pri_val, rebuild_fn):
+                          expand_all, show_done, pri_val, rebuild_fn,
+                          readonly=False):
         # expand_all=True → show expanded; False → contracted
         is_collapsed = not expand_all
 
@@ -692,16 +695,17 @@ class App(ctk.CTk):
                  bg="white", anchor="w").pack(
                  side="left", fill="x", expand=True, ipady=5)
 
-        # Rename icon
-        self._icon_btn(
-            hdr, "✏",
-            lambda p=proj: self._rename_dialog(
-                p, "Project",
-                lambda old, new: db_exec(
-                    f"UPDATE {TABLE} SET impact_project=? WHERE impact_project=?",
-                    (new, old)),
-                self._build_tab1)
-        ).pack(side="right", padx=(0, 8))
+        if not readonly:
+            # Rename icon
+            self._icon_btn(
+                hdr, "✏",
+                lambda p=proj: self._rename_dialog(
+                    p, "Project",
+                    lambda old, new: db_exec(
+                        f"UPDATE {TABLE} SET impact_project=? WHERE impact_project=?",
+                        (new, old)),
+                    self._build_tab1)
+            ).pack(side="right", padx=(0, 8))
 
         tk.Frame(parent, bg="#e8e0ff", height=1).pack(fill="x", padx=8)
 
@@ -711,9 +715,10 @@ class App(ctk.CTk):
         content = tk.Frame(parent, bg="white")
         content.pack(fill="x", padx=(28, 8), pady=(0, 4))
 
-        self._btn(hdr, "+ Goal", "#28a745",
-                  lambda c=content, p=proj: self._inline_add_goal(c, p),
-                  width=6).pack(side="right", padx=(0, 4))
+        if not readonly:
+            self._btn(hdr, "+ Goal", "#28a745",
+                      lambda c=content, p=proj: self._inline_add_goal(c, p),
+                      width=6).pack(side="right", padx=(0, 4))
 
         goals = sorted(set(t["goal"] for t in all_proj_tasks if t["goal"]))
         for goal in goals:
@@ -726,10 +731,13 @@ class App(ctk.CTk):
                     continue
 
             self._render_list_goal(content, proj, goal, goal_tasks,
-                                   show_done, pri_val, rebuild_fn)
+                                   show_done, pri_val, rebuild_fn,
+                                   readonly=readonly)
 
     def _render_list_goal(self, parent, proj, goal, all_goal_tasks,
-                          show_done, pri_val, rebuild_fn):
+                          show_done, pri_val, rebuild_fn, readonly=False):
+        real_tasks = [t for t in all_goal_tasks if t["task"]]
+
         hdr = tk.Frame(parent, bg="white")
         hdr.pack(fill="x", pady=(6, 0))
         tk.Frame(hdr, bg="#bbb", width=2).pack(side="left", fill="y")
@@ -741,20 +749,21 @@ class App(ctk.CTk):
 
         content = tk.Frame(parent, bg="white")
 
-        self._icon_btn(
-            hdr, "✏",
-            lambda p=proj, g=goal: self._rename_dialog(
-                g, "Goal",
-                lambda old, new: db_exec(
-                    f"UPDATE {TABLE} SET goal=? WHERE goal=? AND impact_project=?",
-                    (new, old, p)),
-                self._build_tab1)
-        ).pack(side="right", padx=(0, 4))
+        if not readonly:
+            self._icon_btn(
+                hdr, "✏",
+                lambda p=proj, g=goal: self._rename_dialog(
+                    g, "Goal",
+                    lambda old, new: db_exec(
+                        f"UPDATE {TABLE} SET goal=? WHERE goal=? AND impact_project=?",
+                        (new, old, p)),
+                    self._build_tab1)
+            ).pack(side="right", padx=(0, 4))
 
-        self._btn(hdr, "+ Task", "#28a745",
-                  lambda c=content, p=proj, g=goal:
-                  self._inline_add_task(c, p, g),
-                  width=6).pack(side="right", padx=(0, 4))
+            self._btn(hdr, "+ Task", "#28a745",
+                      lambda c=content, p=proj, g=goal:
+                      self._inline_add_task(c, p, g),
+                      width=6).pack(side="right", padx=(0, 4))
 
         content.pack(fill="x", padx=(16, 0), pady=(2, 0))
 
@@ -1309,7 +1318,8 @@ class App(ctk.CTk):
             if view == "list":
                 self._render_list_view(f, all_tasks, projects,
                                        self._today_expand_all.get(),
-                                       show_done, pri_val, self._build_tab2)
+                                       show_done, pri_val, self._build_tab2,
+                                       readonly=True)
             elif view == "bubble":
                 self._render_bubble_view(f, all_tasks, projects,
                                          show_done, pri_val, self._build_tab2)
