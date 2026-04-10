@@ -492,8 +492,11 @@ class App(ctk.CTk):
 
         top = tk.Frame(f, bg="white")
         top.pack(fill="x", padx=8, pady=(0, 4))
-        self._btn(top, "+ New Project", "#28a745",
-                  lambda: self._inline_add_project(f)).pack(side="left")
+        tk.Button(top, text="(+project)", command=lambda: self._inline_add_project(f),
+                  bg="white", fg="#999", relief="flat", bd=0,
+                  font=("Helvetica", 9), cursor="hand2",
+                  activebackground="#f0f0ff", activeforeground=PURPLE
+                  ).pack(side="left")
 
         all_tasks = self._apply_work_filter(load_tasks())
         show_done = self._t2_show_done.get()
@@ -716,9 +719,11 @@ class App(ctk.CTk):
         content.pack(fill="x", padx=(28, 8), pady=(0, 4))
 
         if not readonly:
-            self._btn(hdr, "+ Goal", "#28a745",
-                      lambda c=content, p=proj: self._inline_add_goal(c, p),
-                      width=6).pack(side="right", padx=(0, 4))
+            tk.Button(hdr, text="(+goal)", command=lambda c=content, p=proj: self._inline_add_goal(c, p),
+                      bg="white", fg="#999", relief="flat", bd=0,
+                      font=("Helvetica", 9), cursor="hand2",
+                      activebackground="#f0f0ff", activeforeground=PURPLE
+                      ).pack(side="right", padx=(0, 6))
 
         goals = sorted(set(t["goal"] for t in all_proj_tasks if t["goal"]))
         for goal in goals:
@@ -760,10 +765,11 @@ class App(ctk.CTk):
                     self._build_tab1)
             ).pack(side="right", padx=(0, 4))
 
-            self._btn(hdr, "+ Task", "#28a745",
-                      lambda c=content, p=proj, g=goal:
-                      self._inline_add_task(c, p, g),
-                      width=6).pack(side="right", padx=(0, 4))
+            tk.Button(hdr, text="(+task)", command=lambda c=content, p=proj, g=goal: self._inline_add_task(c, p, g),
+                      bg="white", fg="#999", relief="flat", bd=0,
+                      font=("Helvetica", 9), cursor="hand2",
+                      activebackground="#f0f0ff", activeforeground=PURPLE
+                      ).pack(side="right", padx=(0, 6))
 
         content.pack(fill="x", padx=(16, 0), pady=(2, 0))
 
