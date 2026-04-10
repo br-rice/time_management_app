@@ -682,17 +682,12 @@ class App(ctk.CTk):
         # expand_all=True → show expanded; False → contracted
         is_collapsed = not expand_all
 
-        real_tasks = [t for t in all_proj_tasks if t["task"]]
-        task_count = len(real_tasks)
-        done_count = sum(1 for t in real_tasks if t["task_completed"])
-        count_str  = f"  ({done_count}/{task_count})" if task_count else ""
-
         hdr = tk.Frame(parent, bg="white")
         hdr.pack(fill="x", pady=(10, 0), padx=8)
         tk.Frame(hdr, bg=PURPLE, width=4).pack(side="left", fill="y")
 
         arrow = "▶" if is_collapsed else "▼"
-        tk.Label(hdr, text=f"   {arrow}   {proj}{count_str}",
+        tk.Label(hdr, text=f"   {arrow}   {proj}",
                  font=("Helvetica", 12, "bold"), fg=PURPLE,
                  bg="white", anchor="w").pack(
                  side="left", fill="x", expand=True, ipady=5)
@@ -735,16 +730,11 @@ class App(ctk.CTk):
 
     def _render_list_goal(self, parent, proj, goal, all_goal_tasks,
                           show_done, pri_val, rebuild_fn):
-        real_tasks = [t for t in all_goal_tasks if t["task"]]
-        task_count = len(real_tasks)
-        done_count = sum(1 for t in real_tasks if t["task_completed"])
-        count_str  = f"  ({done_count}/{task_count})" if task_count else ""
-
         hdr = tk.Frame(parent, bg="white")
         hdr.pack(fill="x", pady=(6, 0))
         tk.Frame(hdr, bg="#bbb", width=2).pack(side="left", fill="y")
 
-        tk.Label(hdr, text=f"   {goal}{count_str}",
+        tk.Label(hdr, text=f"   {goal}",
                  font=("Helvetica", 10, "bold"), fg="#444",
                  bg="white", anchor="w").pack(
                  side="left", fill="x", expand=True, ipady=3)
