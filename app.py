@@ -695,11 +695,10 @@ class App(ctk.CTk):
         arrow = "▶" if is_collapsed else "▼"
         tk.Label(hdr, text=f"   {arrow}   {proj}",
                  font=("Helvetica", 12, "bold"), fg=PURPLE,
-                 bg="white", anchor="w").pack(
-                 side="left", fill="x", expand=True, ipady=5)
+                 bg="white", anchor="w").pack(side="left", ipady=5)
 
         if not readonly:
-            # Rename icon
+            # Rename icon — right next to project name
             self._icon_btn(
                 hdr, "✏",
                 lambda p=proj: self._rename_dialog(
@@ -708,7 +707,10 @@ class App(ctk.CTk):
                         f"UPDATE {TABLE} SET impact_project=? WHERE impact_project=?",
                         (new, old)),
                     self._build_tab1)
-            ).pack(side="right", padx=(0, 8))
+            ).pack(side="left", padx=(2, 0))
+
+        # Spacer
+        tk.Frame(hdr, bg="white").pack(side="left", fill="x", expand=True)
 
         tk.Frame(parent, bg="#e8e0ff", height=1).pack(fill="x", padx=8)
 
@@ -749,12 +751,12 @@ class App(ctk.CTk):
 
         tk.Label(hdr, text=f"   {goal}",
                  font=("Helvetica", 10, "bold"), fg="#444",
-                 bg="white", anchor="w").pack(
-                 side="left", fill="x", expand=True, ipady=3)
+                 bg="white", anchor="w").pack(side="left", ipady=3)
 
         content = tk.Frame(parent, bg="white")
 
         if not readonly:
+            # Rename icon — right next to goal name
             self._icon_btn(
                 hdr, "✏",
                 lambda p=proj, g=goal: self._rename_dialog(
@@ -763,8 +765,12 @@ class App(ctk.CTk):
                         f"UPDATE {TABLE} SET goal=? WHERE goal=? AND impact_project=?",
                         (new, old, p)),
                     self._build_tab1)
-            ).pack(side="right", padx=(0, 4))
+            ).pack(side="left", padx=(2, 0))
 
+        # Spacer
+        tk.Frame(hdr, bg="white").pack(side="left", fill="x", expand=True)
+
+        if not readonly:
             tk.Button(hdr, text="(+task)", command=lambda c=content, p=proj, g=goal: self._inline_add_task(c, p, g),
                       bg="white", fg="#999", relief="flat", bd=0,
                       font=("Helvetica", 9), cursor="hand2",
@@ -945,8 +951,16 @@ class App(ctk.CTk):
         if t.get("due_date"):
             label += f"  📅 {t['due_date']}"
         tk.Label(row, text=label, fg=col, bg=bg,
-                 font=font_style, anchor="w").pack(
-                 side="left", fill="x", expand=True)
+                 font=font_style, anchor="w").pack(side="left")
+
+        # Edit icon — right next to the text
+        self._icon_btn(row, "✏",
+                       lambda tid=t["id"], o=outer:
+                       self._open_inline_edit(tid, o, rebuild_fn),
+                       bg=bg).pack(side="left", padx=(2, 0))
+
+        # Spacer so + Today stays on the right
+        tk.Frame(row, bg=bg).pack(side="left", fill="x", expand=True)
 
         # + Today toggle
         is_today   = (t.get("selected_today") == 1 and t.get("selected_date") == TODAY)
@@ -959,12 +973,6 @@ class App(ctk.CTk):
                   command=lambda tid=t["id"]: self._toggle_today(
                       tid, rebuild_fn)
                   ).pack(side="right", padx=(4, 0))
-
-        # Edit icon
-        self._icon_btn(row, "✏",
-                       lambda tid=t["id"], o=outer:
-                       self._open_inline_edit(tid, o, rebuild_fn),
-                       bg=bg).pack(side="right", padx=(4, 0))
 
         if t.get("notes"):
             tk.Label(outer, text=f"  ↳ {t['notes']}", fg="#999",
