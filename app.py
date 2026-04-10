@@ -153,7 +153,8 @@ class App(ctk.CTk):
                                       command=self._on_tab_change)
         self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
 
-        self._tab_frames = {}
+        self._tab_frames   = {}
+        self._tab_canvases = {}
         for name in ["My Tasks", "Tasks for Today",
                      "Completed Tasks", "Weekly Summary"]:
             self.tabview.add(name)
@@ -170,10 +171,23 @@ class App(ctk.CTk):
                        lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
             canvas.bind("<Configure>",
                         lambda e, c=canvas, w=win: c.itemconfig(w, width=e.width))
-            def _scroll(event, c=canvas):
-                c.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            canvas.bind_all("<MouseWheel>", _scroll)
-            self._tab_frames[name] = inner
+            self._tab_frames[name]   = inner
+            self._tab_canvases[name] = canvas
+
+        # Single scroll handler — scrolls whichever tab canvas is active
+        def _on_mousewheel(event):
+            tab = self.tabview.get()
+            c   = self._tab_canvases.get(tab)
+            if c:
+                if event.delta:
+                    c.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                elif event.num == 4:
+                    c.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    c.yview_scroll(1, "units")
+        self.bind_all("<MouseWheel>", _on_mousewheel)
+        self.bind_all("<Button-4>",   _on_mousewheel)
+        self.bind_all("<Button-5>",   _on_mousewheel)
 
         self._build_tab1()
         self._build_tab2()
