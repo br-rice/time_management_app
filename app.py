@@ -335,7 +335,7 @@ class App(ctk.CTk):
 
         # Expand / Contract All (only shown in list view)
         if view_var.get() == "list":
-            expand_text = "▲ Contract All" if expand_var.get() else "▼ Expand All"
+            expand_text = "▲ Hide Tasks" if expand_var.get() else "▼ Show Tasks"
             def toggle_expand():
                 expand_var.set(not expand_var.get())
                 rebuild_fn()
@@ -686,6 +686,8 @@ class App(ctk.CTk):
             self._build_tab1()
 
     # ── List view ──────────────────────────────────────────────────────────────
+    # expand_all=True  → tasks visible
+    # expand_all=False → goals visible, tasks hidden
 
     def _render_list_view(self, parent, all_tasks, projects,
                           expand_all, show_done, pri_val, rebuild_fn,
@@ -699,20 +701,15 @@ class App(ctk.CTk):
     def _render_list_proj(self, parent, proj, all_proj_tasks,
                           expand_all, show_done, pri_val, rebuild_fn,
                           readonly=False):
-        # expand_all=True → show expanded; False → contracted
-        is_collapsed = not expand_all
-
+        # Project header — one compact line, always visible
         hdr = tk.Frame(parent, bg="white")
-        hdr.pack(fill="x", pady=(10, 0), padx=8)
-        tk.Frame(hdr, bg=PURPLE, width=4).pack(side="left", fill="y")
+        hdr.pack(fill="x", pady=(8, 0), padx=8)
 
-        arrow = "▶" if is_collapsed else "▼"
-        tk.Label(hdr, text=f"   {arrow}   {proj}",
-                 font=("Helvetica", 12, "bold"), fg=PURPLE,
-                 bg="white", anchor="w").pack(side="left", ipady=5)
+        tk.Label(hdr, text=proj,
+                 font=("Helvetica", 11, "bold"), fg=PURPLE,
+                 bg="white", anchor="w").pack(side="left")
 
         if not readonly:
-            # Rename icon — right next to project name
             self._icon_btn(
                 hdr, "✏",
                 lambda p=proj: self._rename_dialog(
@@ -723,54 +720,46 @@ class App(ctk.CTk):
                     self._build_tab1)
             ).pack(side="left", padx=(2, 0))
 
-        # Spacer
         tk.Frame(hdr, bg="white").pack(side="left", fill="x", expand=True)
+
+        if not readonly:
+            tk.Button(hdr, text="(+goal)",
+                      command=lambda p=proj: self._inline_add_goal_compact(parent, p, rebuild_fn),
+                      bg="white", fg="#aaa", relief="flat", bd=0,
+                      font=("Helvetica", 8), cursor="hand2",
+                      activebackground="#f0f0ff", activeforeground=PURPLE
+                      ).pack(side="right", padx=(0, 4))
 
         tk.Frame(parent, bg="#e8e0ff", height=1).pack(fill="x", padx=8)
 
-        if is_collapsed:
-            return
-
-        content = tk.Frame(parent, bg="white")
-        content.pack(fill="x", padx=(28, 8), pady=(0, 4))
-
-        if not readonly:
-            tk.Button(hdr, text="(+goal)", command=lambda c=content, p=proj: self._inline_add_goal(c, p),
-                      bg="white", fg="#999", relief="flat", bd=0,
-                      font=("Helvetica", 9), cursor="hand2",
-                      activebackground="#f0f0ff", activeforeground=PURPLE
-                      ).pack(side="right", padx=(0, 6))
-
+        # Goals — always rendered
         goals = sorted(set(t["goal"] for t in all_proj_tasks if t["goal"]))
         for goal in goals:
             goal_tasks = [t for t in all_proj_tasks if t["goal"] == goal]
             real_goal_tasks = [t for t in goal_tasks if t["task"]]
 
-            # Hide goal if all tasks are done and show_done is off
             if real_goal_tasks and not show_done:
                 if all(t["task_completed"] for t in real_goal_tasks):
                     continue
 
-            self._render_list_goal(content, proj, goal, goal_tasks,
-                                   show_done, pri_val, rebuild_fn,
+            self._render_list_goal(parent, proj, goal, goal_tasks,
+                                   expand_all, show_done, pri_val, rebuild_fn,
                                    readonly=readonly)
 
     def _render_list_goal(self, parent, proj, goal, all_goal_tasks,
-                          show_done, pri_val, rebuild_fn, readonly=False):
+                          expand_all, show_done, pri_val, rebuild_fn,
+                          readonly=False):
         real_tasks = [t for t in all_goal_tasks if t["task"]]
 
+        # Goal row — one compact line, indented
         hdr = tk.Frame(parent, bg="white")
-        hdr.pack(fill="x", pady=(6, 0))
-        tk.Frame(hdr, bg="#bbb", width=2).pack(side="left", fill="y")
+        hdr.pack(fill="x", pady=(2, 0), padx=(24, 8))
 
-        tk.Label(hdr, text=f"   {goal}",
-                 font=("Helvetica", 10, "bold"), fg="#444",
-                 bg="white", anchor="w").pack(side="left", ipady=3)
-
-        content = tk.Frame(parent, bg="white")
+        tk.Label(hdr, text=goal,
+                 font=("Helvetica", 10, "bold"), fg="#555",
+                 bg="white", anchor="w").pack(side="left")
 
         if not readonly:
-            # Rename icon — right next to goal name
             self._icon_btn(
                 hdr, "✏",
                 lambda p=proj, g=goal: self._rename_dialog(
@@ -781,17 +770,19 @@ class App(ctk.CTk):
                     self._build_tab1)
             ).pack(side="left", padx=(2, 0))
 
-        # Spacer
         tk.Frame(hdr, bg="white").pack(side="left", fill="x", expand=True)
 
         if not readonly:
-            tk.Button(hdr, text="(+task)", command=lambda c=content, p=proj, g=goal: self._inline_add_task(c, p, g),
-                      bg="white", fg="#999", relief="flat", bd=0,
-                      font=("Helvetica", 9), cursor="hand2",
+            tk.Button(hdr, text="(+task)",
+                      command=lambda p=proj, g=goal, par=parent: self._inline_add_task_compact(par, p, g, rebuild_fn),
+                      bg="white", fg="#aaa", relief="flat", bd=0,
+                      font=("Helvetica", 8), cursor="hand2",
                       activebackground="#f0f0ff", activeforeground=PURPLE
-                      ).pack(side="right", padx=(0, 6))
+                      ).pack(side="right", padx=(0, 4))
 
-        content.pack(fill="x", padx=(16, 0), pady=(2, 0))
+        # Tasks — only shown when expand_all=True
+        if not expand_all:
+            return
 
         display_tasks = list(real_tasks)
         if not show_done:
@@ -800,7 +791,7 @@ class App(ctk.CTk):
             display_tasks = [t for t in display_tasks if t["priority"] == pri_val]
 
         for t in display_tasks:
-            self._render_task_row(content, t, rebuild_fn, bg="white")
+            self._render_task_row(parent, t, rebuild_fn, bg="white", indent=40)
 
     # ── Bubble view ────────────────────────────────────────────────────────────
 
@@ -939,13 +930,12 @@ class App(ctk.CTk):
 
     # ── Shared task row (list + bubble) ────────────────────────────────────────
 
-    def _render_task_row(self, parent, t, rebuild_fn, bg="white"):
+    def _render_task_row(self, parent, t, rebuild_fn, bg="white", indent=4):
         outer = tk.Frame(parent, bg=bg)
-        outer.pack(fill="x", pady=1)
-        tk.Frame(outer, bg="#ececec", height=1).pack(fill="x")
+        outer.pack(fill="x", pady=0)
 
         row = tk.Frame(outer, bg=bg)
-        row.pack(fill="x", padx=4, pady=(3, 1))
+        row.pack(fill="x", padx=(indent, 4), pady=(1, 0))
 
         # Mark done
         var = tk.BooleanVar(value=bool(t["task_completed"]))
@@ -1307,6 +1297,68 @@ class App(ctk.CTk):
         self._btn(btn_row, "Add Task", "#28a745", save).pack(side="right")
         e_task.bind("<Return>", save)
         e_task.bind("<Escape>", lambda ev: panel.destroy())
+
+    # ── Compact inline add helpers (for list view) ────────────────────────────
+
+    def _inline_add_goal_compact(self, parent, proj, rebuild_fn):
+        for w in parent.winfo_children():
+            if getattr(w, "_inline_add_goal_c", False):
+                w.destroy(); return
+        panel = tk.Frame(parent, bg="#e8ffe8", bd=1, relief="flat")
+        panel._inline_add_goal_c = True
+        panel.pack(fill="x", padx=(24, 8), pady=2)
+        row = tk.Frame(panel, bg="#e8ffe8")
+        row.pack(fill="x", padx=6, pady=4)
+        tk.Label(row, text="Goal:", bg="#e8ffe8", font=("Helvetica", 9)).pack(side="left", padx=(0, 4))
+        e = tk.Entry(row, width=24, relief="flat", highlightthickness=1,
+                     highlightbackground="#ccc", highlightcolor=PURPLE, bg="white")
+        e.pack(side="left", padx=(0, 6), ipady=2)
+        e.focus()
+        is_work_var = tk.BooleanVar(value=self._is_work_for_proj(proj))
+        self._work_toggle(row, is_work_var, bg="#e8ffe8").pack(side="left", padx=(0, 6))
+        def save(ev=None):
+            name = e.get().strip()
+            if not name: panel.destroy(); return
+            if any(t["impact_project"] == proj and t["goal"] == name for t in load_tasks()):
+                messagebox.showwarning("Duplicate", "Goal already exists."); return
+            db_exec(f"INSERT INTO {TABLE} (impact_project,goal,task_completed,"
+                    f"selected_today,priority,time_spent,is_work) VALUES(?,?,0,0,'Medium',0,?)",
+                    (proj, name, 1 if is_work_var.get() else 0))
+            panel.destroy(); rebuild_fn()
+        self._btn(row, "Add", "#28a745", save).pack(side="left", padx=(0, 4))
+        self._btn(row, "✕", "#888", lambda: panel.destroy()).pack(side="left")
+        e.bind("<Return>", save)
+        e.bind("<Escape>", lambda ev: panel.destroy())
+
+    def _inline_add_task_compact(self, parent, proj, goal, rebuild_fn):
+        for w in parent.winfo_children():
+            if getattr(w, "_inline_add_task_c", False):
+                w.destroy(); return
+        is_work = 1 if self._is_work_for_goal(goal) else 0
+        panel = tk.Frame(parent, bg="#e8ffe8", bd=1, relief="flat")
+        panel._inline_add_task_c = True
+        panel.pack(fill="x", padx=(40, 8), pady=2)
+        row = tk.Frame(panel, bg="#e8ffe8")
+        row.pack(fill="x", padx=6, pady=4)
+        tk.Label(row, text="Task:", bg="#e8ffe8", font=("Helvetica", 9)).pack(side="left", padx=(0, 4))
+        e = tk.Entry(row, width=26, relief="flat", highlightthickness=1,
+                     highlightbackground="#ccc", highlightcolor=PURPLE, bg="white")
+        e.pack(side="left", padx=(0, 6), ipady=2)
+        e.focus()
+        pri_cb = ttk.Combobox(row, values=PRIORITIES, state="readonly", width=9)
+        pri_cb.current(1); pri_cb.pack(side="left", padx=(0, 6))
+        def save(ev=None):
+            task = e.get().strip()
+            if not task: panel.destroy(); return
+            db_exec(f"INSERT INTO {TABLE} (impact_project,goal,task,task_completed,"
+                    f"selected_today,priority,time_spent,is_work,created_date)"
+                    f" VALUES(?,?,?,0,0,?,0,?,?)",
+                    (proj, goal, task, pri_cb.get(), is_work, str(date.today())))
+            panel.destroy(); rebuild_fn()
+        self._btn(row, "Add", "#28a745", save).pack(side="left", padx=(0, 4))
+        self._btn(row, "✕", "#888", lambda: panel.destroy()).pack(side="left")
+        e.bind("<Return>", save)
+        e.bind("<Escape>", lambda ev: panel.destroy())
 
     # ── Tab 2: Tasks for Today ─────────────────────────────────────────────────
 
