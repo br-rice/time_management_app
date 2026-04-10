@@ -133,6 +133,12 @@ class App(ctk.CTk):
         self._today_view_mode  = tk.StringVar(value="bubble")
         self._today_expand_all = tk.BooleanVar(value=True)
 
+        # Completed Tasks state
+        self._t3_view_mode  = tk.StringVar(value="list")
+        self._t3_expand_all = tk.BooleanVar(value=True)
+        self._t3_pri_filter = tk.StringVar(value="All")
+        self._t3_time_win   = tk.StringVar(value="all")  # all/7/30/90
+
         # Manage section collapsed by default
         self._manage_collapsed = True
 
@@ -691,16 +697,16 @@ class App(ctk.CTk):
 
     def _render_list_view(self, parent, all_tasks, projects,
                           expand_all, show_done, pri_val, rebuild_fn,
-                          readonly=False):
+                          readonly=False, completed_mode=False):
         for proj in projects:
             proj_tasks = [t for t in all_tasks if t["impact_project"] == proj]
             self._render_list_proj(parent, proj, proj_tasks,
                                    expand_all, show_done, pri_val, rebuild_fn,
-                                   readonly=readonly)
+                                   readonly=readonly, completed_mode=completed_mode)
 
     def _render_list_proj(self, parent, proj, all_proj_tasks,
                           expand_all, show_done, pri_val, rebuild_fn,
-                          readonly=False):
+                          readonly=False, completed_mode=False):
         # Project header — one compact line, always visible
         hdr = tk.Frame(parent, bg="white")
         hdr.pack(fill="x", pady=(8, 0), padx=8)
@@ -744,11 +750,11 @@ class App(ctk.CTk):
 
             self._render_list_goal(parent, proj, goal, goal_tasks,
                                    expand_all, show_done, pri_val, rebuild_fn,
-                                   readonly=readonly)
+                                   readonly=readonly, completed_mode=completed_mode)
 
     def _render_list_goal(self, parent, proj, goal, all_goal_tasks,
                           expand_all, show_done, pri_val, rebuild_fn,
-                          readonly=False):
+                          readonly=False, completed_mode=False):
         real_tasks = [t for t in all_goal_tasks if t["task"]]
 
         # Goal row — one compact line, indented
@@ -791,12 +797,13 @@ class App(ctk.CTk):
             display_tasks = [t for t in display_tasks if t["priority"] == pri_val]
 
         for t in display_tasks:
-            self._render_task_row(parent, t, rebuild_fn, bg="white", indent=40)
+            self._render_task_row(parent, t, rebuild_fn, bg="white", indent=40,
+                                  completed_mode=completed_mode)
 
     # ── Bubble view ────────────────────────────────────────────────────────────
 
     def _render_bubble_view(self, parent, all_tasks, projects,
-                            show_done, pri_val, rebuild_fn):
+                            show_done, pri_val, rebuild_fn, completed_mode=False):
         COLS = 3
         for row_start in range(0, len(projects), COLS):
             row_projs = projects[row_start:row_start + COLS]
@@ -830,12 +837,13 @@ class App(ctk.CTk):
                         display = [t for t in display if t["priority"] == pri_val]
 
                     for t in display:
-                        self._render_task_row(card, t, rebuild_fn, bg=LIGHT)
+                        self._render_task_row(card, t, rebuild_fn, bg=LIGHT,
+                                             completed_mode=completed_mode)
 
     # ── Table view ─────────────────────────────────────────────────────────────
 
-    def _render_table_view(self, parent, all_tasks, show_done, pri_val, rebuild_fn):
-        # Columns definition: (db_key, header_label, char_width)
+    def _render_table_view(self, parent, all_tasks, show_done, pri_val,
+                           rebuild_fn, completed_mode=False):
         COLS = [
             ("impact_project", "Project",  14),
             ("goal",           "Goal",     14),
@@ -859,7 +867,6 @@ class App(ctk.CTk):
         container = tk.Frame(parent, bg="white")
         container.pack(fill="x", padx=8, pady=4)
 
-        # Header row
         hdr = tk.Frame(container, bg="#e8e0ff")
         hdr.pack(fill="x", pady=(0, 1))
         for key, label, w in COLS:
@@ -876,7 +883,7 @@ class App(ctk.CTk):
             return
 
         for i, t in enumerate(tasks):
-            bg     = "#f8f8ff" if i % 2 == 0 else "white"
+            bg      = "#f8f8ff" if i % 2 == 0 else "white"
             is_done = bool(t["task_completed"])
 
             outer = tk.Frame(container, bg=bg)
@@ -899,50 +906,62 @@ class App(ctk.CTk):
                          font=font_s, fg=fg, bg=bg,
                          padx=4).pack(side="left")
 
-            # Mark done checkbox
+            # Checkbox
             var = tk.BooleanVar(value=is_done)
-            def on_done(tid=t["id"], v=var):
-                db_exec(f"UPDATE {TABLE} SET task_completed=? WHERE id=?",
-                        (1 if v.get() else 0, tid))
-                rebuild_fn()
-            tk.Checkbutton(row, variable=var, command=on_done,
-                           bg=bg, activebackground=bg,
-                           text="Done").pack(side="left", padx=(4, 2))
+            if completed_mode:
+                def on_done(tid=t["id"], v=var):
+                    db_exec(f"UPDATE {TABLE} SET task_completed=0 WHERE id=?", (tid,))
+                    rebuild_fn()
+                tk.Checkbutton(row, variable=var, command=on_done,
+                               bg=bg, activebackground=bg).pack(side="left", padx=(4, 2))
+            else:
+                def on_done(tid=t["id"], v=var):
+                    db_exec(f"UPDATE {TABLE} SET task_completed=? WHERE id=?",
+                            (1 if v.get() else 0, tid))
+                    rebuild_fn()
+                tk.Checkbutton(row, variable=var, command=on_done,
+                               bg=bg, activebackground=bg,
+                               text="Done").pack(side="left", padx=(4, 2))
 
-            # + Today toggle
-            is_today   = (t.get("selected_today") == 1 and
-                          t.get("selected_date") == TODAY)
-            today_bg   = "#28a745" if is_today else "#bbb"
-            today_text = "✓ Today" if is_today else "+ Today"
-            tk.Button(row, text=today_text, bg=today_bg, fg="white",
-                      relief="flat", font=("Helvetica", 8), padx=5, pady=1,
-                      cursor="hand2", activeforeground="white",
-                      activebackground=today_bg,
-                      command=lambda tid=t["id"]: self._toggle_today(
-                          tid, rebuild_fn)
-                      ).pack(side="left", padx=(2, 0))
+                # + Today toggle
+                is_today   = (t.get("selected_today") == 1 and
+                              t.get("selected_date") == TODAY)
+                today_bg   = "#28a745" if is_today else "#bbb"
+                today_text = "✓ Today" if is_today else "+ Today"
+                tk.Button(row, text=today_text, bg=today_bg, fg="white",
+                          relief="flat", font=("Helvetica", 8), padx=5, pady=1,
+                          cursor="hand2", activeforeground="white",
+                          activebackground=today_bg,
+                          command=lambda tid=t["id"]: self._toggle_today(
+                              tid, rebuild_fn)
+                          ).pack(side="left", padx=(2, 0))
 
-            # Edit icon
-            self._icon_btn(row, "✏",
-                           lambda tid=t["id"], o=outer:
-                           self._open_inline_edit(tid, o, rebuild_fn),
-                           bg=bg).pack(side="left", padx=(6, 0))
+                self._icon_btn(row, "✏",
+                               lambda tid=t["id"], o=outer:
+                               self._open_inline_edit(tid, o, rebuild_fn),
+                               bg=bg).pack(side="left", padx=(6, 0))
 
     # ── Shared task row (list + bubble) ────────────────────────────────────────
 
-    def _render_task_row(self, parent, t, rebuild_fn, bg="white", indent=4):
+    def _render_task_row(self, parent, t, rebuild_fn, bg="white", indent=4,
+                         completed_mode=False):
         outer = tk.Frame(parent, bg=bg)
         outer.pack(fill="x", pady=0)
 
         row = tk.Frame(outer, bg=bg)
         row.pack(fill="x", padx=(indent, 4), pady=(1, 0))
 
-        # Mark done
+        # Checkbox — in completed_mode unchecking moves task back to My Tasks
         var = tk.BooleanVar(value=bool(t["task_completed"]))
-        def on_done(tid=t["id"], v=var):
-            db_exec(f"UPDATE {TABLE} SET task_completed=? WHERE id=?",
-                    (1 if v.get() else 0, tid))
-            rebuild_fn()
+        if completed_mode:
+            def on_done(tid=t["id"], v=var):
+                db_exec(f"UPDATE {TABLE} SET task_completed=0 WHERE id=?", (tid,))
+                rebuild_fn()
+        else:
+            def on_done(tid=t["id"], v=var):
+                db_exec(f"UPDATE {TABLE} SET task_completed=? WHERE id=?",
+                        (1 if v.get() else 0, tid))
+                rebuild_fn()
         tk.Checkbutton(row, variable=var, command=on_done,
                        bg=bg, activebackground=bg).pack(side="left")
 
@@ -957,26 +976,28 @@ class App(ctk.CTk):
         tk.Label(row, text=label, fg=col, bg=bg,
                  font=font_style, anchor="w").pack(side="left")
 
-        # Edit icon — right next to the text
-        self._icon_btn(row, "✏",
-                       lambda tid=t["id"], o=outer:
-                       self._open_inline_edit(tid, o, rebuild_fn),
-                       bg=bg).pack(side="left", padx=(2, 0))
+        if not completed_mode:
+            # Edit icon — right next to the text
+            self._icon_btn(row, "✏",
+                           lambda tid=t["id"], o=outer:
+                           self._open_inline_edit(tid, o, rebuild_fn),
+                           bg=bg).pack(side="left", padx=(2, 0))
 
-        # Spacer so + Today stays on the right
+        # Spacer
         tk.Frame(row, bg=bg).pack(side="left", fill="x", expand=True)
 
-        # + Today toggle
-        is_today   = (t.get("selected_today") == 1 and t.get("selected_date") == TODAY)
-        today_bg   = "#28a745" if is_today else "#bbb"
-        today_text = "✓ Today" if is_today else "+ Today"
-        tk.Button(row, text=today_text, bg=today_bg, fg="white",
-                  relief="flat", font=("Helvetica", 9), padx=6, pady=2,
-                  cursor="hand2", activeforeground="white",
-                  activebackground=today_bg,
-                  command=lambda tid=t["id"]: self._toggle_today(
-                      tid, rebuild_fn)
-                  ).pack(side="right", padx=(4, 0))
+        if not completed_mode:
+            # + Today toggle
+            is_today   = (t.get("selected_today") == 1 and t.get("selected_date") == TODAY)
+            today_bg   = "#28a745" if is_today else "#bbb"
+            today_text = "✓ Today" if is_today else "+ Today"
+            tk.Button(row, text=today_text, bg=today_bg, fg="white",
+                      relief="flat", font=("Helvetica", 9), padx=6, pady=2,
+                      cursor="hand2", activeforeground="white",
+                      activebackground=today_bg,
+                      command=lambda tid=t["id"]: self._toggle_today(
+                          tid, rebuild_fn)
+                      ).pack(side="right", padx=(4, 0))
 
         if t.get("notes"):
             tk.Label(outer, text=f"  ↳ {t['notes']}", fg="#999",
@@ -1424,42 +1445,110 @@ class App(ctk.CTk):
         f.configure(bg="white")
 
         bar = tk.Frame(f, bg="#f0f0f8")
-        bar.pack(fill="x", padx=8, pady=(8, 6))
+        bar.pack(fill="x", padx=8, pady=(8, 4))
+
+        # Work filter
         tk.Label(bar, text="Show:", bg="#f0f0f8",
                  font=("Helvetica", 9, "bold"), fg="#555").pack(
                  side="left", padx=(10, 4), pady=8)
         for val, label in [("work", "Work"), ("all", "All"), ("nonwork", "Non-work")]:
             tk.Radiobutton(bar, text=label, variable=self._work_filter,
-                           value=val, indicatoron=0,
-                           font=("Helvetica", 9),
+                           value=val, indicatoron=0, font=("Helvetica", 9),
                            bg="#e0e0ee", fg="#333",
                            activebackground="#d0d0e8", activeforeground="#333",
-                           selectcolor="#c8c0ff", relief="flat",
-                           padx=8, pady=3,
+                           selectcolor="#c8c0ff", relief="flat", padx=8, pady=3,
                            command=self._build_tab3).pack(
                            side="left", padx=(0, 2), pady=8)
 
+        tk.Frame(bar, bg="#ccc", width=1).pack(side="left", fill="y", padx=8, pady=4)
+
+        # Time window filter
+        tk.Label(bar, text="Period:", bg="#f0f0f8",
+                 font=("Helvetica", 9)).pack(side="left", padx=(0, 4), pady=8)
+        for val, label in [("7", "Last 7d"), ("30", "Last 30d"),
+                           ("90", "Last 90d"), ("all", "All time")]:
+            tk.Radiobutton(bar, text=label, variable=self._t3_time_win,
+                           value=val, indicatoron=0, font=("Helvetica", 9),
+                           bg="#e0e0ee", fg="#333",
+                           activebackground="#d0d0e8", activeforeground="#333",
+                           selectcolor="#c8c0ff", relief="flat", padx=8, pady=3,
+                           command=self._build_tab3).pack(
+                           side="left", padx=(0, 2), pady=8)
+
+        tk.Frame(bar, bg="#ccc", width=1).pack(side="left", fill="y", padx=8, pady=4)
+
+        # Priority filter
+        tk.Label(bar, text="Priority:", bg="#f0f0f8",
+                 font=("Helvetica", 9)).pack(side="left", padx=(0, 4), pady=8)
+        pri_cb = ttk.Combobox(bar, values=["All"] + PRIORITIES, width=9,
+                               textvariable=self._t3_pri_filter, state="readonly")
+        pri_cb.pack(side="left", padx=(0, 10), pady=8)
+        pri_cb.bind("<<ComboboxSelected>>", lambda _: self._build_tab3())
+
+        tk.Frame(bar, bg="#ccc", width=1).pack(side="left", fill="y", padx=8, pady=4)
+
+        # Expand / contract (list view only)
+        if self._t3_view_mode.get() == "list":
+            expand_text = "▲ Hide Tasks" if self._t3_expand_all.get() else "▼ Show Tasks"
+            def toggle_t3_expand():
+                self._t3_expand_all.set(not self._t3_expand_all.get())
+                self._build_tab3()
+            tk.Button(bar, text=expand_text, command=toggle_t3_expand,
+                      bg="#f0f0f8", fg="#555", relief="flat",
+                      font=("Helvetica", 9), padx=8, pady=3, cursor="hand2",
+                      activebackground="#e0e0ee").pack(side="left", padx=(0, 8), pady=8)
+            tk.Frame(bar, bg="#ccc", width=1).pack(side="left", fill="y", padx=8, pady=4)
+
+        # View mode buttons
+        tk.Label(bar, text="View:", bg="#f0f0f8",
+                 font=("Helvetica", 9)).pack(side="left", padx=(0, 4), pady=8)
+        for mode, label in [("list", "List"), ("bubble", "Bubble"), ("table", "Table")]:
+            active = (self._t3_view_mode.get() == mode)
+            def set_mode(m=mode):
+                self._t3_view_mode.set(m)
+                self._build_tab3()
+            tk.Button(bar, text=label, command=set_mode,
+                      bg=PURPLE if active else "#e0e0ee",
+                      fg="white" if active else "#333",
+                      relief="flat", font=("Helvetica", 9),
+                      padx=8, pady=3, cursor="hand2",
+                      activebackground=PURPLE,
+                      activeforeground="white").pack(side="left", padx=(0, 2), pady=8)
+
+        # Filter tasks
         all_done = self._apply_work_filter(
             [t for t in load_tasks() if t["task"] and t["task_completed"]])
 
-        cols  = ("Project", "Goal", "Task", "Priority",
-                 "Type", "Due Date", "Notes")
-        tree  = ttk.Treeview(f, columns=cols, show="headings", height=22)
-        widths = {"Project": 120, "Goal": 120, "Task": 190, "Priority": 70,
-                  "Type": 75, "Due Date": 85, "Notes": 200}
-        for c in cols:
-            tree.heading(c, text=c)
-            tree.column(c, width=widths.get(c, 100))
-        for t in all_done:
-            tree.insert("", "end", values=(
-                t["impact_project"], t["goal"], t["task"], t["priority"],
-                "Work" if t.get("is_work", 1) else "Non-work",
-                t.get("due_date") or "",
-                t["notes"] or ""))
-        sb = ttk.Scrollbar(f, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=sb.set)
-        tree.pack(side="left", fill="both", expand=True, padx=10, pady=10)
-        sb.pack(side="left", fill="y", pady=10)
+        time_win = self._t3_time_win.get()
+        if time_win != "all":
+            cutoff = str(date.today() - timedelta(days=int(time_win)))
+            all_done = [t for t in all_done
+                        if (t.get("selected_date") or t.get("created_date") or "") >= cutoff]
+
+        pri_val = self._t3_pri_filter.get()
+        if pri_val != "All":
+            all_done = [t for t in all_done if t["priority"] == pri_val]
+
+        projects = sorted(set(t["impact_project"] for t in all_done if t["impact_project"]))
+
+        if not all_done:
+            tk.Label(f, text="No completed tasks match the current filters.",
+                     bg="white", fg="#888", font=("Helvetica", 11)).pack(pady=20)
+            return
+
+        view = self._t3_view_mode.get()
+        if view == "list":
+            self._render_list_view(f, all_done, projects,
+                                   self._t3_expand_all.get(),
+                                   True, pri_val, self._build_tab3,
+                                   readonly=True, completed_mode=True)
+        elif view == "bubble":
+            self._render_bubble_view(f, all_done, projects,
+                                     True, pri_val, self._build_tab3,
+                                     completed_mode=True)
+        else:
+            self._render_table_view(f, all_done, True, pri_val,
+                                    self._build_tab3, completed_mode=True)
 
     # ── Tab 4: Weekly Summary ──────────────────────────────────────────────────
 
