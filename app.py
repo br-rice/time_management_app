@@ -499,8 +499,6 @@ class App(ctk.CTk):
         f = self._tab_frames["My Tasks"]
         f.configure(bg="white")
 
-        self._build_quick_add(f)
-        self._build_manage_section(f)
         self._build_filter_bar(
             f,
             view_var   = self._t2_view_mode,
@@ -510,14 +508,6 @@ class App(ctk.CTk):
             rebuild_fn = self._build_tab1,
         )
 
-        top = tk.Frame(f, bg="white")
-        top.pack(fill="x", padx=8, pady=(0, 4))
-        tk.Button(top, text="(+project)", command=lambda: self._inline_add_project(f),
-                  bg="white", fg="#999", relief="flat", bd=0,
-                  font=("Helvetica", 9), cursor="hand2",
-                  activebackground="#f0f0ff", activeforeground=PURPLE
-                  ).pack(side="left")
-
         all_tasks = self._apply_work_filter(load_tasks())
         show_done = self._t2_show_done.get()
         pri_val   = self._t2_pri_filter.get()
@@ -525,22 +515,30 @@ class App(ctk.CTk):
                                if t["impact_project"]))
 
         if not projects:
-            tk.Label(f, text="No projects yet. Click '+ New Project' to get started.",
+            tk.Label(f, text="No projects yet — click '(+project)' below to get started.",
                      bg="white", fg="#888",
                      font=("Helvetica", 11)).pack(pady=20)
-            return
-
-        view = self._t2_view_mode.get()
-        if view == "list":
-            self._render_list_view(f, all_tasks, projects,
-                                   self._t2_expand_all.get(),
-                                   show_done, pri_val, self._build_tab1)
-        elif view == "bubble":
-            self._render_bubble_view(f, all_tasks, projects,
-                                     show_done, pri_val, self._build_tab1)
         else:
-            self._render_table_view(f, all_tasks, show_done, pri_val,
-                                    self._build_tab1)
+            view = self._t2_view_mode.get()
+            if view == "list":
+                self._render_list_view(f, all_tasks, projects,
+                                       self._t2_expand_all.get(),
+                                       show_done, pri_val, self._build_tab1)
+            elif view == "bubble":
+                self._render_bubble_view(f, all_tasks, projects,
+                                         show_done, pri_val, self._build_tab1)
+            else:
+                self._render_table_view(f, all_tasks, show_done, pri_val,
+                                        self._build_tab1)
+
+        # (+project) lives at the bottom so it's always reachable
+        bottom = tk.Frame(f, bg="white")
+        bottom.pack(fill="x", padx=8, pady=(6, 10))
+        tk.Button(bottom, text="(+project)", command=lambda: self._inline_add_project(f),
+                  bg="white", fg="#999", relief="flat", bd=0,
+                  font=("Helvetica", 9), cursor="hand2",
+                  activebackground="#f0f0ff", activeforeground=PURPLE
+                  ).pack(side="left")
 
     # ── Manage section (collapsible) ───────────────────────────────────────────
 
@@ -707,13 +705,18 @@ class App(ctk.CTk):
     def _render_list_proj(self, parent, proj, all_proj_tasks,
                           expand_all, show_done, pri_val, rebuild_fn,
                           readonly=False, completed_mode=False):
+        # Each project gets its own container so inline forms appear in-context
+        proj_frame = tk.Frame(parent, bg="white")
+        proj_frame.pack(fill="x")
+
         # Project header — one compact line, always visible
-        hdr = tk.Frame(parent, bg="white")
+        hdr = tk.Frame(proj_frame, bg="white")
         hdr.pack(fill="x", pady=(8, 0), padx=8)
 
-        tk.Label(hdr, text=proj,
+        proj_lbl = tk.Label(hdr, text=proj,
                  font=("Helvetica", 11, "bold"), fg=PURPLE,
-                 bg="white", anchor="w").pack(side="left")
+                 bg="white", anchor="w")
+        proj_lbl.pack(side="left")
 
         if not readonly:
             self._icon_btn(
@@ -730,13 +733,28 @@ class App(ctk.CTk):
 
         if not readonly:
             tk.Button(hdr, text="(+goal)",
-                      command=lambda p=proj: self._inline_add_goal_compact(parent, p, rebuild_fn),
+                      command=lambda p=proj, pf=proj_frame: self._inline_add_goal_compact(pf, p, rebuild_fn),
                       bg="white", fg="#aaa", relief="flat", bd=0,
                       font=("Helvetica", 8), cursor="hand2",
                       activebackground="#f0f0ff", activeforeground=PURPLE
                       ).pack(side="right", padx=(0, 4))
 
-        tk.Frame(parent, bg="#e8e0ff", height=1).pack(fill="x", padx=8)
+            def _proj_ctx(event, p=proj, pf=proj_frame):
+                self._show_ctx_menu(event, [
+                    ("Rename project", lambda: self._rename_dialog(
+                        p, "Project",
+                        lambda old, new: db_exec(
+                            f"UPDATE {TABLE} SET impact_project=? WHERE impact_project=?",
+                            (new, old)),
+                        self._build_tab1)),
+                    ("Add goal", lambda: self._inline_add_goal_compact(pf, p, rebuild_fn)),
+                    ("---", None),
+                    ("Delete project…", lambda: self._delete_project(p)),
+                ])
+            for w in (hdr, proj_lbl):
+                w.bind("<Button-3>", _proj_ctx)
+
+        tk.Frame(proj_frame, bg="#e8e0ff", height=1).pack(fill="x", padx=8)
 
         # Goals — always rendered
         goals = sorted(set(t["goal"] for t in all_proj_tasks if t["goal"]))
@@ -748,7 +766,7 @@ class App(ctk.CTk):
                 if all(t["task_completed"] for t in real_goal_tasks):
                     continue
 
-            self._render_list_goal(parent, proj, goal, goal_tasks,
+            self._render_list_goal(proj_frame, proj, goal, goal_tasks,
                                    expand_all, show_done, pri_val, rebuild_fn,
                                    readonly=readonly, completed_mode=completed_mode)
 
@@ -757,13 +775,18 @@ class App(ctk.CTk):
                           readonly=False, completed_mode=False):
         real_tasks = [t for t in all_goal_tasks if t["task"]]
 
+        # Each goal gets its own container so inline forms appear in-context
+        goal_frame = tk.Frame(parent, bg="white")
+        goal_frame.pack(fill="x")
+
         # Goal row — one compact line, indented
-        hdr = tk.Frame(parent, bg="white")
+        hdr = tk.Frame(goal_frame, bg="white")
         hdr.pack(fill="x", pady=(2, 0), padx=(24, 8))
 
-        tk.Label(hdr, text=goal,
+        goal_lbl = tk.Label(hdr, text=goal,
                  font=("Helvetica", 10, "bold"), fg="#555",
-                 bg="white", anchor="w").pack(side="left")
+                 bg="white", anchor="w")
+        goal_lbl.pack(side="left")
 
         if not readonly:
             self._icon_btn(
@@ -780,11 +803,26 @@ class App(ctk.CTk):
 
         if not readonly:
             tk.Button(hdr, text="(+task)",
-                      command=lambda p=proj, g=goal, par=parent: self._inline_add_task_compact(par, p, g, rebuild_fn),
+                      command=lambda p=proj, g=goal, gf=goal_frame: self._inline_add_task_compact(gf, p, g, rebuild_fn),
                       bg="white", fg="#aaa", relief="flat", bd=0,
                       font=("Helvetica", 8), cursor="hand2",
                       activebackground="#f0f0ff", activeforeground=PURPLE
                       ).pack(side="right", padx=(0, 4))
+
+            def _goal_ctx(event, p=proj, g=goal, gf=goal_frame):
+                self._show_ctx_menu(event, [
+                    ("Rename goal", lambda: self._rename_dialog(
+                        g, "Goal",
+                        lambda old, new: db_exec(
+                            f"UPDATE {TABLE} SET goal=? WHERE goal=? AND impact_project=?",
+                            (new, old, p)),
+                        self._build_tab1)),
+                    ("Add task", lambda: self._inline_add_task_compact(gf, p, g, rebuild_fn)),
+                    ("---", None),
+                    ("Delete goal…", lambda: self._delete_goal(p, g)),
+                ])
+            for w in (hdr, goal_lbl):
+                w.bind("<Button-3>", _goal_ctx)
 
         # Tasks — only shown when expand_all=True
         if not expand_all:
@@ -797,7 +835,7 @@ class App(ctk.CTk):
             display_tasks = [t for t in display_tasks if t["priority"] == pri_val]
 
         for t in display_tasks:
-            self._render_task_row(parent, t, rebuild_fn, bg="white", indent=40,
+            self._render_task_row(goal_frame, t, rebuild_fn, bg="white", indent=40,
                                   completed_mode=completed_mode)
 
     # ── Bubble view ────────────────────────────────────────────────────────────
@@ -810,13 +848,32 @@ class App(ctk.CTk):
             row_frame = tk.Frame(parent, bg="white")
             row_frame.pack(fill="x", padx=8, pady=(0, 6))
 
-            for proj in row_projs:
+            for col_idx in range(COLS):
+                row_frame.columnconfigure(col_idx, weight=1, uniform="col")
+
+            for col_idx, proj in enumerate(row_projs):
                 proj_tasks = [t for t in all_tasks if t["impact_project"] == proj]
                 card = tk.LabelFrame(row_frame, text=f"  {proj}  ",
                                       font=("Helvetica", 11, "bold"), fg=PURPLE,
                                       bg=LIGHT, bd=2, relief="groove",
                                       padx=8, pady=6)
-                card.pack(side="left", fill="both", expand=True, padx=4, anchor="n")
+                card.grid(row=0, column=col_idx, sticky="nsew", padx=4)
+
+                if not completed_mode:
+                    def _card_ctx(event, p=proj, c=card):
+                        self._show_ctx_menu(event, [
+                            ("Rename project", lambda: self._rename_dialog(
+                                p, "Project",
+                                lambda old, new: db_exec(
+                                    f"UPDATE {TABLE} SET impact_project=? WHERE impact_project=?",
+                                    (new, old)),
+                                self._build_tab1)),
+                            ("Add goal", lambda: self._inline_add_goal_compact(
+                                c, p, rebuild_fn, padx=(4, 4))),
+                            ("---", None),
+                            ("Delete project…", lambda: self._delete_project(p)),
+                        ])
+                    card.bind("<Button-3>", _card_ctx)
 
                 goals = sorted(set(t["goal"] for t in proj_tasks if t["goal"]))
                 for goal in goals:
@@ -827,8 +884,25 @@ class App(ctk.CTk):
                         if all(t["task_completed"] for t in real_gtasks):
                             continue
 
-                    tk.Label(card, text=goal, font=("Helvetica", 10, "bold"),
-                             bg=LIGHT, fg="#444").pack(anchor="w", pady=(6, 2))
+                    goal_lbl = tk.Label(card, text=goal, font=("Helvetica", 10, "bold"),
+                             bg=LIGHT, fg="#444")
+                    goal_lbl.pack(anchor="w", pady=(6, 2))
+
+                    if not completed_mode:
+                        def _glbl_ctx(event, p=proj, g=goal, c=card):
+                            self._show_ctx_menu(event, [
+                                ("Rename goal", lambda: self._rename_dialog(
+                                    g, "Goal",
+                                    lambda old, new: db_exec(
+                                        f"UPDATE {TABLE} SET goal=? WHERE goal=? AND impact_project=?",
+                                        (new, old, p)),
+                                    self._build_tab1)),
+                                ("Add task", lambda: self._inline_add_task_compact(
+                                    c, p, g, rebuild_fn)),
+                                ("---", None),
+                                ("Delete goal…", lambda: self._delete_goal(p, g)),
+                            ])
+                        goal_lbl.bind("<Button-3>", _glbl_ctx)
 
                     display = list(real_gtasks)
                     if not show_done:
@@ -839,6 +913,15 @@ class App(ctk.CTk):
                     for t in display:
                         self._render_task_row(card, t, rebuild_fn, bg=LIGHT,
                                              completed_mode=completed_mode)
+
+                if not completed_mode:
+                    tk.Button(card, text="(+goal)",
+                              command=lambda c=card, p=proj: self._inline_add_goal_compact(
+                                  c, p, rebuild_fn, padx=(4, 4)),
+                              bg=LIGHT, fg="#aaa", relief="flat", bd=0,
+                              font=("Helvetica", 8), cursor="hand2",
+                              activebackground="#f0f0ff", activeforeground=PURPLE
+                              ).pack(anchor="w", pady=(6, 0))
 
     # ── Table view ─────────────────────────────────────────────────────────────
 
@@ -882,7 +965,40 @@ class App(ctk.CTk):
                      font=("Helvetica", 10)).pack(pady=10)
             return
 
+        current_proj = None
         for i, t in enumerate(tasks):
+            if t["impact_project"] != current_proj:
+                current_proj = t["impact_project"]
+                proj_hdr = tk.Frame(container, bg="#f0ecff")
+                proj_hdr.pack(fill="x", pady=(6, 0))
+                proj_hdr_lbl = tk.Label(proj_hdr, text=current_proj,
+                         font=("Helvetica", 9, "bold"), fg=PURPLE,
+                         bg="#f0ecff", padx=8, anchor="w")
+                proj_hdr_lbl.pack(side="left")
+                if not completed_mode:
+                    tk.Button(proj_hdr, text="(+goal)",
+                              command=lambda p=current_proj: self._inline_add_goal_compact(
+                                  container, p, rebuild_fn, padx=(4, 4)),
+                              bg="#f0ecff", fg="#aaa", relief="flat", bd=0,
+                              font=("Helvetica", 8), cursor="hand2",
+                              activebackground="#e8e0ff", activeforeground=PURPLE
+                              ).pack(side="right", padx=4)
+                    def _tbl_proj_ctx(event, p=current_proj):
+                        self._show_ctx_menu(event, [
+                            ("Rename project", lambda: self._rename_dialog(
+                                p, "Project",
+                                lambda old, new: db_exec(
+                                    f"UPDATE {TABLE} SET impact_project=? WHERE impact_project=?",
+                                    (new, old)),
+                                self._build_tab1)),
+                            ("Add goal", lambda: self._inline_add_goal_compact(
+                                container, p, rebuild_fn, padx=(4, 4))),
+                            ("---", None),
+                            ("Delete project…", lambda: self._delete_project(p)),
+                        ])
+                    for w in (proj_hdr, proj_hdr_lbl):
+                        w.bind("<Button-3>", _tbl_proj_ctx)
+
             bg      = "#f8f8ff" if i % 2 == 0 else "white"
             is_done = bool(t["task_completed"])
 
@@ -1004,6 +1120,27 @@ class App(ctk.CTk):
                      font=("Helvetica", 9), bg=bg,
                      anchor="w").pack(fill="x", padx=(20, 4), pady=(0, 2))
 
+        if not completed_mode:
+            is_today = (t.get("selected_today") == 1 and
+                        t.get("selected_date") == TODAY)
+            today_label = "Remove from Today" if is_today else "Add to Today"
+            is_done = bool(t["task_completed"])
+            done_label = "Unmark complete" if is_done else "Mark complete"
+            def _task_ctx(event, tid=t["id"], o=outer,
+                          tl=today_label, dl=done_label):
+                self._show_ctx_menu(event, [
+                    ("Edit", lambda: self._open_inline_edit(tid, o, rebuild_fn)),
+                    (tl, lambda: self._toggle_today(tid, rebuild_fn)),
+                    (dl, lambda: (
+                        db_exec(f"UPDATE {TABLE} SET task_completed=? WHERE id=?",
+                                (0 if is_done else 1, tid)),
+                        rebuild_fn())),
+                    ("---", None),
+                    ("Delete task…", lambda: self._delete_task(tid, rebuild_fn)),
+                ])
+            for w in (outer, row):
+                w.bind("<Button-3>", _task_ctx)
+
     # ── Inline edit panel (includes delete) ────────────────────────────────────
 
     def _open_inline_edit(self, task_id, container, rebuild_fn):
@@ -1102,6 +1239,43 @@ class App(ctk.CTk):
         self._btn(btn_row, "Cancel", "#888",
                   lambda: panel.destroy()).pack(side="right", padx=(6, 0))
         self._btn(btn_row, "Save", PURPLE, save).pack(side="right")
+
+    # ── Context menu helper ────────────────────────────────────────────────────
+
+    def _show_ctx_menu(self, event, items):
+        menu = tk.Menu(self, tearoff=0)
+        for label, cmd in items:
+            if label == "---":
+                menu.add_separator()
+            else:
+                menu.add_command(label=label, command=cmd)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _delete_task(self, task_id, rebuild_fn):
+        if messagebox.askyesno("Delete task", "Delete this task permanently?"):
+            db_exec(f"DELETE FROM {TABLE} WHERE id=?", (task_id,))
+            rebuild_fn()
+
+    def _delete_goal(self, proj, goal):
+        tasks = [t for t in load_tasks()
+                 if t["impact_project"] == proj and t["goal"] == goal and t["task"]]
+        if tasks:
+            if not messagebox.askyesno(
+                "Delete goal",
+                f"'{goal}' has {len(tasks)} task(s). Delete the goal and all its tasks?"):
+                return
+        db_exec(f"DELETE FROM {TABLE} WHERE impact_project=? AND goal=?", (proj, goal))
+        self._build_tab1()
+
+    def _delete_project(self, proj):
+        rows = [t for t in load_tasks() if t["impact_project"] == proj]
+        if rows:
+            if not messagebox.askyesno(
+                "Delete project",
+                f"'{proj}' has {len(rows)} row(s). Delete the project and everything in it?"):
+                return
+        db_exec(f"DELETE FROM {TABLE} WHERE impact_project=?", (proj,))
+        self._build_tab1()
 
     # ── Today / Done helpers ───────────────────────────────────────────────────
 
@@ -1321,13 +1495,13 @@ class App(ctk.CTk):
 
     # ── Compact inline add helpers (for list view) ────────────────────────────
 
-    def _inline_add_goal_compact(self, parent, proj, rebuild_fn):
+    def _inline_add_goal_compact(self, parent, proj, rebuild_fn, padx=(24, 8)):
         for w in parent.winfo_children():
             if getattr(w, "_inline_add_goal_c", False):
                 w.destroy(); return
         panel = tk.Frame(parent, bg="#e8ffe8", bd=1, relief="flat")
         panel._inline_add_goal_c = True
-        panel.pack(fill="x", padx=(24, 8), pady=2)
+        panel.pack(fill="x", padx=padx, pady=2)
         row = tk.Frame(panel, bg="#e8ffe8")
         row.pack(fill="x", padx=6, pady=4)
         tk.Label(row, text="Goal:", bg="#e8ffe8", font=("Helvetica", 9)).pack(side="left", padx=(0, 4))
