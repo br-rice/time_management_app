@@ -310,7 +310,8 @@ class App(ctk.CTk):
             cnv.create_oval(kx - r + 3, 3, kx + r - 3, H - 3,
                             fill="white", outline="")
         _draw()
-        var.trace_add("write", _draw)
+        trace_id = var.trace_add("write", _draw)
+        cnv.bind("<Destroy>", lambda e: var.trace_remove("write", trace_id))
         cnv.bind("<Button-1>", lambda e: (var.set(not var.get()), on_change()))
         return cnv
 
