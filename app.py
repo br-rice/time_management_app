@@ -449,20 +449,22 @@ class App(ctk.CTk):
 
         _sep()
 
-        # View mode (right side)
-        tk.Label(bar, text="View:", bg=FILTER_BG,
-                 font=("Helvetica", 9), fg="#6b7280").pack(side="left", padx=(0, 4), pady=8)
+        # View mode — packed right-to-left so it floats to the right edge
+        view_frame = tk.Frame(bar, bg=FILTER_BG)
+        view_frame.pack(side="right", padx=(0, 10), pady=8)
+        tk.Label(view_frame, text="View:", bg=FILTER_BG,
+                 font=("Helvetica", 9), fg="#6b7280").pack(side="left", padx=(0, 4))
         for vmode, label in [("list", "List"), ("bubble", "Bubble"), ("table", "Table")]:
             active = (view_var.get() == vmode)
             def set_mode(m=vmode):
                 view_var.set(m); rebuild_fn()
-            tk.Button(bar, text=label, command=set_mode,
+            tk.Button(view_frame, text=label, command=set_mode,
                       bg=GREEN if active else "#e5e7eb",
                       fg="white" if active else "#6b7280",
                       relief="flat", font=("Helvetica", 9),
                       padx=8, pady=3, cursor="hand2",
                       activebackground=GREEN_DARK, activeforeground="white"
-                      ).pack(side="left", padx=(0, 2), pady=8)
+                      ).pack(side="left", padx=(0, 2))
 
     # ── Quick-Add banner ───────────────────────────────────────────────────────
 
@@ -1133,8 +1135,7 @@ class App(ctk.CTk):
                                text="Done").pack(side="left", padx=(4, 2))
 
                 # + Today toggle
-                is_today   = (t.get("selected_today") == 1 and
-                              t.get("selected_date") == TODAY)
+                is_today   = (t.get("selected_today") == 1)
                 today_bg   = "#28a745" if is_today else "#bbb"
                 today_text = "✓ Today" if is_today else "+ Today"
                 tk.Button(row, text=today_text, bg=today_bg, fg="white",
@@ -1197,7 +1198,7 @@ class App(ctk.CTk):
                  ).pack(side="left", fill="x", expand=True)
 
         if not completed_mode:
-            is_today   = (t.get("selected_today") == 1 and t.get("selected_date") == TODAY)
+            is_today   = (t.get("selected_today") == 1)
             today_bg   = GREEN if is_today else "#d1d5db"
             today_text = "✓ Today" if is_today else "+ Today"
             tk.Button(row, text=today_text, bg=today_bg, fg="white",
@@ -1215,7 +1216,7 @@ class App(ctk.CTk):
 
         # Right-click — normal mode
         if not completed_mode:
-            is_today = (t.get("selected_today") == 1 and t.get("selected_date") == TODAY)
+            is_today = (t.get("selected_today") == 1)
             is_done  = bool(t["task_completed"])
             def _task_ctx(event, tid=t["id"],
                           tl="Remove from Today" if is_today else "Add to Today",
@@ -1397,12 +1398,12 @@ class App(ctk.CTk):
         t = next((x for x in load_tasks() if x["id"] == task_id), None)
         if t is None:
             return
-        if t.get("selected_today") == 1 and t.get("selected_date") == TODAY:
+        if t.get("selected_today") == 1:
             db_exec(f"UPDATE {TABLE} SET selected_today=0 WHERE id=?", (task_id,))
         else:
             db_exec(
-                f"UPDATE {TABLE} SET selected_today=1,selected_date=? WHERE id=?",
-                (TODAY, task_id))
+                f"UPDATE {TABLE} SET selected_today=1 WHERE id=?",
+                (task_id,))
         rebuild_fn()
 
     # ── Rename dialog ──────────────────────────────────────────────────────────
@@ -1980,7 +1981,6 @@ class App(ctk.CTk):
             t for t in load_tasks()
             if t["task"]
             and t.get("selected_today") == 1
-            and t.get("selected_date") == TODAY
         ]))
         show_done = self._today_show_done.get()
         pri_val   = self._today_pri_filter.get()
@@ -2012,8 +2012,7 @@ class App(ctk.CTk):
 
     def _reset_today(self):
         if messagebox.askyesno("Reset", "Clear today's list? Tasks won't be deleted."):
-            db_exec(f"UPDATE {TABLE} SET selected_today=0 WHERE selected_date=?",
-                    (TODAY,))
+            db_exec(f"UPDATE {TABLE} SET selected_today=0 WHERE selected_today=1")
             self._build_tab2()
 
     # ── Tab 3: Completed Tasks ─────────────────────────────────────────────────
@@ -2088,21 +2087,23 @@ class App(ctk.CTk):
                       activebackground="#e5e7eb").pack(side="left", pady=8)
             _sep()
 
-        # View mode
-        tk.Label(bar, text="View:", bg=FILTER_BG,
-                 font=("Helvetica", 9), fg="#6b7280").pack(side="left", padx=(0, 4), pady=8)
+        # View mode — floated right
+        view_frame3 = tk.Frame(bar, bg=FILTER_BG)
+        view_frame3.pack(side="right", padx=(0, 10), pady=8)
+        tk.Label(view_frame3, text="View:", bg=FILTER_BG,
+                 font=("Helvetica", 9), fg="#6b7280").pack(side="left", padx=(0, 4))
         for mode, label in [("list", "List"), ("bubble", "Bubble"), ("table", "Table")]:
             active = (self._t3_view_mode.get() == mode)
             def set_mode(m=mode):
                 self._t3_view_mode.set(m)
                 self._build_tab3()
-            tk.Button(bar, text=label, command=set_mode,
+            tk.Button(view_frame3, text=label, command=set_mode,
                       bg=GREEN if active else "#e5e7eb",
                       fg="white" if active else "#6b7280",
                       relief="flat", font=("Helvetica", 9),
                       padx=8, pady=3, cursor="hand2",
                       activebackground=GREEN_DARK,
-                      activeforeground="white").pack(side="left", padx=(0, 2), pady=8)
+                      activeforeground="white").pack(side="left", padx=(0, 2))
 
         # Filter tasks
         all_done = self._apply_proj_filter(self._apply_work_filter(
