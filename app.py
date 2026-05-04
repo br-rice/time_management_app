@@ -133,8 +133,10 @@ class App(ctk.CTk):
         # Project visibility filter — set of excluded project names (empty = show all)
         self._proj_filter_excluded: set = set()
 
-        # Bubble collapse state: (proj, goal) -> bool (True = expanded)
+        # Bubble expand state: (proj, goal) -> bool
+        # Default (key absent) = True (expanded). False = collapsed.
         self._bubble_expanded: dict = {}
+        self._bubble_global_expand = tk.BooleanVar(value=True)
 
         # My Tasks state
         self._t2_pri_filter = tk.StringVar(value="All")
@@ -284,6 +286,40 @@ class App(ctk.CTk):
                        selectcolor=bg).pack(side="left")
         return row
 
+    def _toggle_switch(self, parent, var, on_change, bg=FILTER_BG):
+        """Renders an iOS-style toggle switch bound to a BooleanVar."""
+        W, H = 40, 22
+        cnv = tk.Canvas(parent, width=W, height=H, bg=bg,
+                        highlightthickness=0, cursor="hand2")
+        def _draw(*_):
+            cnv.delete("all")
+            on  = var.get()
+            col = GREEN if on else "#d1d5db"
+            r   = H // 2
+            # track
+            cnv.create_oval(0, 0, H, H, fill=col, outline="")
+            cnv.create_oval(W - H, 0, W, H, fill=col, outline="")
+            cnv.create_rectangle(r, 0, W - r, H, fill=col, outline=col)
+            # knob
+            kx = W - r if on else r
+            cnv.create_oval(kx - r + 3, 3, kx + r - 3, H - 3,
+                            fill="white", outline="")
+        _draw()
+        var.trace_add("write", _draw)
+        cnv.bind("<Button-1>", lambda e: (var.set(not var.get()), on_change()))
+        return cnv
+
+    def _sort_by_activity(self, projects, all_tasks, show_done, pri_val):
+        """Returns projects sorted: non-empty first (alpha), empty last (alpha)."""
+        def _empty(proj):
+            tasks = [t for t in all_tasks if t["impact_project"] == proj and t["task"]]
+            if not show_done:
+                tasks = [t for t in tasks if not t["task_completed"]]
+            if pri_val != "All":
+                tasks = [t for t in tasks if t["priority"] == pri_val]
+            return len(tasks) == 0
+        return sorted(projects, key=lambda p: (1 if _empty(p) else 0, p.lower()))
+
     def _mini_progress(self, parent, done, total, color=GREEN, bg=CARD_BG):
         pct = done / total if total > 0 else 0
         row = tk.Frame(parent, bg=bg)
@@ -343,19 +379,14 @@ class App(ctk.CTk):
         def _sep():
             tk.Frame(bar, bg=BORDER, width=1).pack(side="left", fill="y", padx=8, pady=4)
 
-        # Work-mode toggle
-        wm_on = self._work_mode.get()
-        tk.Button(bar,
-                  text="Work Mode",
-                  command=lambda: (self._work_mode.set(not self._work_mode.get()),
-                                   rebuild_fn()),
-                  bg=GREEN if wm_on else "#e5e7eb",
-                  fg="white" if wm_on else "#6b7280",
-                  relief="flat", font=("Helvetica", 9, "bold"),
-                  padx=10, pady=3, cursor="hand2",
-                  activebackground=GREEN_DARK if wm_on else "#d1d5db",
-                  activeforeground="white" if wm_on else "#374151",
-                  ).pack(side="left", padx=(10, 0), pady=8)
+        # Work-mode toggle switch
+        wm_frame = tk.Frame(bar, bg=FILTER_BG)
+        wm_frame.pack(side="left", padx=(10, 6), pady=8)
+        self._toggle_switch(wm_frame, self._work_mode, rebuild_fn,
+                            bg=FILTER_BG).pack(side="left")
+        tk.Label(wm_frame, text="Work", font=("Helvetica", 9, "bold"),
+                 fg=GREEN if self._work_mode.get() else "#9ca3af",
+                 bg=FILTER_BG).pack(side="left", padx=(4, 0))
 
         _sep()
 
@@ -372,16 +403,33 @@ class App(ctk.CTk):
 
         _sep()
 
-        # Expand / contract (list view only)
-        if view_var.get() == "list":
+        # Expand / contract — list view: per task; bubble view: global
+        cur_view = view_var.get()
+        if cur_view == "list":
             expand_text = "▲ Collapse" if expand_var.get() else "▼ Expand"
             def toggle_expand():
-                expand_var.set(not expand_var.get())
-                rebuild_fn()
+                expand_var.set(not expand_var.get()); rebuild_fn()
             tk.Button(bar, text=expand_text, command=toggle_expand,
                       bg=FILTER_BG, fg="#6b7280", relief="flat",
                       font=("Helvetica", 9), padx=8, pady=3, cursor="hand2",
-                      activebackground="#e5e7eb").pack(side="left", padx=(0, 0), pady=8)
+                      activebackground="#e5e7eb").pack(side="left", pady=8)
+            _sep()
+        elif cur_view == "bubble":
+            bexp = self._bubble_global_expand.get()
+            def _bubble_expand_all():
+                self._bubble_global_expand.set(True)
+                self._bubble_expanded.clear(); rebuild_fn()
+            def _bubble_collapse_all():
+                self._bubble_global_expand.set(False)
+                self._bubble_expanded.clear(); rebuild_fn()
+            tk.Button(bar, text="▼ Expand All", command=_bubble_expand_all,
+                      bg=FILTER_BG, fg="#6b7280", relief="flat",
+                      font=("Helvetica", 9), padx=8, pady=3, cursor="hand2",
+                      activebackground="#e5e7eb").pack(side="left", pady=8)
+            tk.Button(bar, text="▲ Collapse All", command=_bubble_collapse_all,
+                      bg=FILTER_BG, fg="#6b7280", relief="flat",
+                      font=("Helvetica", 9), padx=8, pady=3, cursor="hand2",
+                      activebackground="#e5e7eb").pack(side="left", padx=(2, 0), pady=8)
             _sep()
 
         # Priority filter
@@ -544,8 +592,8 @@ class App(ctk.CTk):
         all_tasks = self._apply_proj_filter(self._apply_work_filter(load_tasks()))
         show_done = self._t2_show_done.get()
         pri_val   = self._t2_pri_filter.get()
-        projects  = sorted(set(t["impact_project"] for t in all_tasks
-                               if t["impact_project"]))
+        raw_projs = sorted(set(t["impact_project"] for t in all_tasks if t["impact_project"]))
+        projects  = self._sort_by_activity(raw_projs, all_tasks, show_done, pri_val)
 
         if not projects:
             tk.Label(f, text="No projects yet — click '(+project)' below to get started.",
@@ -791,10 +839,10 @@ class App(ctk.CTk):
 
         tk.Frame(proj_frame, bg=BORDER, height=1).pack(fill="x", padx=8)
 
-        # Goals — always rendered
+        # Goals — hide completed goals unless "Show completed" is on
         goals = sorted(set(t["goal"] for t in all_proj_tasks if t["goal"]))
         for goal in goals:
-            goal_tasks = [t for t in all_proj_tasks if t["goal"] == goal]
+            goal_tasks      = [t for t in all_proj_tasks if t["goal"] == goal]
             real_goal_tasks = [t for t in goal_tasks if t["task"]]
 
             if real_goal_tasks and not show_done:
@@ -920,7 +968,8 @@ class App(ctk.CTk):
                         if all(t["task_completed"] for t in real_gtasks):
                             continue
 
-                    is_exp  = self._bubble_expanded.get((proj, goal), False)
+                    is_exp  = self._bubble_expanded.get(
+                        (proj, goal), self._bubble_global_expand.get())
                     chevron = "▼" if is_exp else "▶"
                     goal_lbl = tk.Label(card, text=f"{chevron} {goal}",
                                         font=("Helvetica", 10, "bold"),
@@ -1665,9 +1714,13 @@ class App(ctk.CTk):
                   activebackground=GREEN_DARK, activeforeground="white"
                   ).pack(side="right")
 
-        # Focus first text entry
+        # Focus first text entry; bind Return on every entry and the dialog
         first = next((w for w in widgets.values() if isinstance(w, tk.Entry)), None)
         if first: first.focus()
+        for w in widgets.values():
+            if isinstance(w, tk.Entry):
+                w.bind("<Return>", lambda _: _save())
+        dlg.bind("<Return>", lambda _: _save())
         dlg.bind("<Escape>", lambda _: dlg.destroy())
 
     # ── Inline add project / goal / task ───────────────────────────────────────
@@ -1931,8 +1984,8 @@ class App(ctk.CTk):
         ]))
         show_done = self._today_show_done.get()
         pri_val   = self._today_pri_filter.get()
-        projects  = sorted(set(t["impact_project"] for t in all_tasks
-                               if t["impact_project"]))
+        raw_projs = sorted(set(t["impact_project"] for t in all_tasks if t["impact_project"]))
+        projects  = self._sort_by_activity(raw_projs, all_tasks, show_done, pri_val)
 
         if not all_tasks:
             tk.Label(f, text="No tasks selected for today.",
@@ -1976,18 +2029,14 @@ class App(ctk.CTk):
         def _sep():
             tk.Frame(bar, bg=BORDER, width=1).pack(side="left", fill="y", padx=8, pady=4)
 
-        # Work mode toggle
-        wm_on = self._work_mode.get()
-        tk.Button(bar, text="Work Mode",
-                  command=lambda: (self._work_mode.set(not self._work_mode.get()),
-                                   self._build_tab3()),
-                  bg=GREEN if wm_on else "#e5e7eb",
-                  fg="white" if wm_on else "#6b7280",
-                  relief="flat", font=("Helvetica", 9, "bold"),
-                  padx=10, pady=3, cursor="hand2",
-                  activebackground=GREEN_DARK if wm_on else "#d1d5db",
-                  activeforeground="white" if wm_on else "#374151",
-                  ).pack(side="left", padx=(10, 0), pady=8)
+        # Work mode toggle switch
+        wm3 = tk.Frame(bar, bg=FILTER_BG)
+        wm3.pack(side="left", padx=(10, 6), pady=8)
+        self._toggle_switch(wm3, self._work_mode, self._build_tab3,
+                            bg=FILTER_BG).pack(side="left")
+        tk.Label(wm3, text="Work", font=("Helvetica", 9, "bold"),
+                 fg=GREEN if self._work_mode.get() else "#9ca3af",
+                 bg=FILTER_BG).pack(side="left", padx=(4, 0))
 
         _sep()
 
@@ -2069,7 +2118,8 @@ class App(ctk.CTk):
         if pri_val != "All":
             all_done = [t for t in all_done if t["priority"] == pri_val]
 
-        projects = sorted(set(t["impact_project"] for t in all_done if t["impact_project"]))
+        raw_projs = sorted(set(t["impact_project"] for t in all_done if t["impact_project"]))
+        projects  = self._sort_by_activity(raw_projs, all_done, True, pri_val)
 
         if not all_done:
             tk.Label(f, text="No completed tasks match the current filters.",
@@ -2099,17 +2149,13 @@ class App(ctk.CTk):
 
         bar = tk.Frame(f, bg=FILTER_BG)
         bar.pack(fill="x", padx=8, pady=(8, 6))
-        wm_on = self._work_mode.get()
-        tk.Button(bar, text="Work Mode",
-                  command=lambda: (self._work_mode.set(not self._work_mode.get()),
-                                   self._build_tab4()),
-                  bg=GREEN if wm_on else "#e5e7eb",
-                  fg="white" if wm_on else "#6b7280",
-                  relief="flat", font=("Helvetica", 9, "bold"),
-                  padx=10, pady=3, cursor="hand2",
-                  activebackground=GREEN_DARK if wm_on else "#d1d5db",
-                  activeforeground="white" if wm_on else "#374151",
-                  ).pack(side="left", padx=(10, 0), pady=8)
+        wm4 = tk.Frame(bar, bg=FILTER_BG)
+        wm4.pack(side="left", padx=(10, 6), pady=8)
+        self._toggle_switch(wm4, self._work_mode, self._build_tab4,
+                            bg=FILTER_BG).pack(side="left")
+        tk.Label(wm4, text="Work", font=("Helvetica", 9, "bold"),
+                 fg=GREEN if self._work_mode.get() else "#9ca3af",
+                 bg=FILTER_BG).pack(side="left", padx=(4, 0))
 
         all_tasks = self._apply_proj_filter(self._apply_work_filter(
             [t for t in load_tasks() if t["task"]]))
