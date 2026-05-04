@@ -1044,7 +1044,8 @@ class App(ctk.CTk):
                             display = [t for t in display if t["priority"] == pri_val]
                         for t in display:
                             self._render_task_row(card, t, rebuild_fn, bg=CARD_BG,
-                                                 completed_mode=completed_mode)
+                                                 completed_mode=completed_mode,
+                                                 compact=True)
 
                 if not completed_mode:
                     tk.Button(card, text="(+goal)",
@@ -1192,7 +1193,7 @@ class App(ctk.CTk):
     # ── Shared task row (list + bubble) ────────────────────────────────────────
 
     def _render_task_row(self, parent, t, rebuild_fn, bg="white", indent=4,
-                         completed_mode=False):
+                         completed_mode=False, compact=False):
         outer = tk.Frame(parent, bg=bg)
         outer.pack(fill="x", pady=0)
 
@@ -1230,22 +1231,36 @@ class App(ctk.CTk):
                                "edit_task", self._task_prefill(tid), rebuild_fn),
                            bg=bg).pack(side="left", padx=(2, 0))
 
-        # Dotted leader line fills the gap to the right-side buttons
-        tk.Label(row, text=" · " * 80, fg="#d1d5db", bg=bg,
-                 font=("Helvetica", 8), anchor="w"
-                 ).pack(side="left", fill="x", expand=True)
-
         if not completed_mode:
             is_today   = (t.get("selected_today") == 1)
             today_bg   = GREEN if is_today else "#d1d5db"
             today_text = "✓ Today" if is_today else "+ Today"
-            tk.Button(row, text=today_text, bg=today_bg, fg="white",
-                      relief="flat", font=("Helvetica", 9), padx=6, pady=2,
-                      cursor="hand2", activeforeground="white",
-                      activebackground=GREEN_DARK if is_today else "#9ca3af",
-                      command=lambda tid=t["id"]: self._toggle_today(
-                          tid, rebuild_fn)
-                      ).pack(side="right", padx=(4, 0))
+            if compact:
+                # Bubble cards are narrow — pack Today inline, no dotted leader
+                tk.Button(row, text=today_text, bg=today_bg, fg="white",
+                          relief="flat", font=("Helvetica", 8), padx=4, pady=1,
+                          cursor="hand2", activeforeground="white",
+                          activebackground=GREEN_DARK if is_today else "#9ca3af",
+                          command=lambda tid=t["id"]: self._toggle_today(
+                              tid, rebuild_fn)
+                          ).pack(side="left", padx=(4, 0))
+            else:
+                # List view — dotted leader then Today on the right
+                tk.Label(row, text=" · " * 80, fg="#d1d5db", bg=bg,
+                         font=("Helvetica", 8), anchor="w"
+                         ).pack(side="left", fill="x", expand=True)
+                tk.Button(row, text=today_text, bg=today_bg, fg="white",
+                          relief="flat", font=("Helvetica", 9), padx=6, pady=2,
+                          cursor="hand2", activeforeground="white",
+                          activebackground=GREEN_DARK if is_today else "#9ca3af",
+                          command=lambda tid=t["id"]: self._toggle_today(
+                              tid, rebuild_fn)
+                          ).pack(side="right", padx=(4, 0))
+        elif not compact:
+            # Completed mode, list view — keep dotted leader for alignment
+            tk.Label(row, text=" · " * 80, fg="#d1d5db", bg=bg,
+                     font=("Helvetica", 8), anchor="w"
+                     ).pack(side="left", fill="x", expand=True)
 
         if t.get("notes"):
             tk.Label(outer, text=f"   ↳ {t['notes']}", fg="#9ca3af",
