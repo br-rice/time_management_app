@@ -74,6 +74,11 @@ def db_conn():
 
 def setup_db():
     with db_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS project_meta (
+                name     TEXT PRIMARY KEY,
+                archived INTEGER DEFAULT 0
+            )""")
         tables = [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
         if TABLE in tables:
@@ -349,9 +354,37 @@ class App(ctk.CTk):
             return tasks
         return [t for t in tasks if t.get("impact_project") not in self._proj_filter_excluded]
 
+    def _archived_projects(self):
+        with db_conn() as conn:
+            rows = conn.execute(
+                "SELECT name FROM project_meta WHERE archived=1").fetchall()
+        return {r[0] for r in rows}
+
     def _all_projects(self):
+        """Active (non-archived) projects — used for views."""
+        archived = self._archived_projects()
         return sorted(set(t["impact_project"] for t in load_tasks()
-                          if t["impact_project"]))
+                          if t["impact_project"] and t["impact_project"] not in archived))
+
+    def _all_project_names(self):
+        """All project names including archived — used for dialog dropdowns."""
+        from_tasks = set(t["impact_project"] for t in load_tasks() if t["impact_project"])
+        archived   = self._archived_projects()
+        return sorted(from_tasks | archived)
+
+    def _filter_archived(self, projects):
+        archived = self._archived_projects()
+        return [p for p in projects if p not in archived]
+
+    def _archive_project(self, proj, rebuild_fn):
+        with db_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO project_meta(name,archived) VALUES(?,1)", (proj,))
+            conn.commit()
+        rebuild_fn()
+
+    def _unarchive_project(self, proj):
+        db_exec("INSERT OR REPLACE INTO project_meta(name,archived) VALUES(?,0)", (proj,))
 
     def _goals_for_project(self, project):
         return sorted(set(t["goal"] for t in load_tasks()
@@ -594,7 +627,8 @@ class App(ctk.CTk):
         all_tasks = self._apply_proj_filter(self._apply_work_filter(load_tasks()))
         show_done = self._t2_show_done.get()
         pri_val   = self._t2_pri_filter.get()
-        raw_projs = sorted(set(t["impact_project"] for t in all_tasks if t["impact_project"]))
+        raw_projs = self._filter_archived(
+            sorted(set(t["impact_project"] for t in all_tasks if t["impact_project"])))
         projects  = self._sort_by_activity(raw_projs, all_tasks, show_done, pri_val)
 
         if not projects:
@@ -834,6 +868,7 @@ class App(ctk.CTk):
                     ("Add goal", lambda: self._open_dialog(
                         "add_goal", {"project": p}, rebuild_fn)),
                     ("---", None),
+                    ("Archive project", lambda: self._archive_project(p, rebuild_fn)),
                     ("Delete project…", lambda: self._delete_project(p)),
                 ])
             for w in (hdr, proj_lbl):
@@ -957,6 +992,7 @@ class App(ctk.CTk):
                             ("Add goal", lambda: self._open_dialog(
                                 "add_goal", {"project": p}, rebuild_fn)),
                             ("---", None),
+                            ("Archive project", lambda: self._archive_project(p, rebuild_fn)),
                             ("Delete project…", lambda: self._delete_project(p)),
                         ])
                     card.bind("<Button-3>", _card_ctx)
@@ -1089,6 +1125,7 @@ class App(ctk.CTk):
                             ("Add goal", lambda: self._open_dialog(
                                 "add_goal", {"project": p}, rebuild_fn)),
                             ("---", None),
+                            ("Archive project", lambda: self._archive_project(p, rebuild_fn)),
                             ("Delete project…", lambda: self._delete_project(p)),
                         ])
                     for w in (proj_hdr, proj_hdr_lbl):
@@ -1390,6 +1427,7 @@ class App(ctk.CTk):
                 f"'{proj}' has {len(rows)} row(s). Delete the project and everything in it?"):
                 return
         db_exec(f"DELETE FROM {TABLE} WHERE impact_project=?", (proj,))
+        db_exec("DELETE FROM project_meta WHERE name=?", (proj,))
         self._build_tab1()
 
     # ── Today / Done helpers ───────────────────────────────────────────────────
@@ -1551,7 +1589,7 @@ class App(ctk.CTk):
                     padx=(0, 8 if col == 0 and span == 1 else 0), pady=(2, 0))
             return cb
 
-        all_projs = self._all_projects()
+        all_projs = self._all_project_names()
 
         if mode in ("add_task", "edit_task"):
             _lbl("Task name", 0, span=2)
@@ -1662,11 +1700,13 @@ class App(ctk.CTk):
                             f" VALUES(?,?,?,0,0,?,0,?,?,?,?)",
                             (proj, goal, task, pri, is_work,
                              due_raw or None, str(date.today()), notes))
+                    self._unarchive_project(proj)
                 else:
                     db_exec(f"UPDATE {TABLE} SET task=?,impact_project=?,goal=?,"
                             f"priority=?,due_date=?,notes=?,is_work=? WHERE id=?",
                             (task, proj, goal, pri,
                              due_raw or None, notes, is_work, prefill["id"]))
+                    self._unarchive_project(proj)
 
             elif mode == "add_goal":
                 proj = widgets["project"].get().strip()
@@ -1682,6 +1722,7 @@ class App(ctk.CTk):
                         f"(impact_project,goal,task_completed,selected_today,"
                         f"priority,time_spent,is_work) VALUES(?,?,0,0,'Medium',0,?)",
                         (proj, name, iw))
+                self._unarchive_project(proj)
 
             elif mode == "edit_goal":
                 new_name = widgets["goal_name"].get().strip()
@@ -1705,6 +1746,7 @@ class App(ctk.CTk):
                         f"(impact_project,goal,task_completed,selected_today,"
                         f"priority,time_spent,is_work) VALUES(?,?,0,0,'Medium',0,?)",
                         (pname, gname, iw))
+                self._unarchive_project(pname)
 
             dlg.destroy(); rebuild_fn()
 
@@ -1984,7 +2026,8 @@ class App(ctk.CTk):
         ]))
         show_done = self._today_show_done.get()
         pri_val   = self._today_pri_filter.get()
-        raw_projs = sorted(set(t["impact_project"] for t in all_tasks if t["impact_project"]))
+        raw_projs = self._filter_archived(
+            sorted(set(t["impact_project"] for t in all_tasks if t["impact_project"])))
         projects  = self._sort_by_activity(raw_projs, all_tasks, show_done, pri_val)
 
         if not all_tasks:
@@ -2119,7 +2162,8 @@ class App(ctk.CTk):
         if pri_val != "All":
             all_done = [t for t in all_done if t["priority"] == pri_val]
 
-        raw_projs = sorted(set(t["impact_project"] for t in all_done if t["impact_project"]))
+        raw_projs = self._filter_archived(
+            sorted(set(t["impact_project"] for t in all_done if t["impact_project"])))
         projects  = self._sort_by_activity(raw_projs, all_done, True, pri_val)
 
         if not all_done:
