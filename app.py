@@ -79,6 +79,13 @@ def setup_db():
                 name     TEXT PRIMARY KEY,
                 archived INTEGER DEFAULT 0
             )""")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS goal_meta (
+                project  TEXT NOT NULL,
+                goal     TEXT NOT NULL,
+                archived INTEGER DEFAULT 0,
+                PRIMARY KEY (project, goal)
+            )""")
         tables = [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
         if TABLE in tables:
@@ -159,7 +166,9 @@ class App(ctk.CTk):
         self._t3_view_mode  = tk.StringVar(value="list")
         self._t3_expand_all = tk.BooleanVar(value=True)
         self._t3_pri_filter = tk.StringVar(value="All")
-        self._t3_time_win   = tk.StringVar(value="all")  # all/7/30/90
+        self._t3_time_win   = tk.StringVar(value="all")  # kept for compat
+        self._t3_from_days  = tk.IntVar(value=30)
+        self._t3_to_days    = tk.IntVar(value=0)
 
         # Manage section collapsed by default
         self._manage_collapsed = True
@@ -387,6 +396,50 @@ class App(ctk.CTk):
     def _unarchive_project(self, proj):
         db_exec("INSERT OR REPLACE INTO project_meta(name,archived) VALUES(?,0)", (proj,))
 
+    def _archived_goals(self) -> set:
+        with db_conn() as conn:
+            rows = conn.execute(
+                "SELECT project, goal FROM goal_meta WHERE archived=1").fetchall()
+        return {(r[0], r[1]) for r in rows}
+
+    def _archive_goal(self, proj, goal, rebuild_fn):
+        with db_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO goal_meta(project,goal,archived) VALUES(?,?,1)",
+                (proj, goal))
+        rebuild_fn()
+
+    def _unarchive_goal(self, proj, goal, rebuild_fn):
+        db_exec("INSERT OR REPLACE INTO goal_meta(project,goal,archived) VALUES(?,?,0)",
+                (proj, goal))
+        rebuild_fn()
+
+    def _show_archived_goals_dialog(self, proj, rebuild_fn):
+        archived = [(p, g) for (p, g) in self._archived_goals() if p == proj]
+        if not archived:
+            return
+        dlg = tk.Toplevel(self)
+        dlg.title(f"Archived Goals — {proj}")
+        dlg.geometry("360x300")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        tk.Label(dlg, text=f'Archived goals in "{proj}"',
+                 font=("Helvetica", 11, "bold"), fg=GREEN).pack(pady=(14, 6))
+        frm = tk.Frame(dlg)
+        frm.pack(fill="both", expand=True, padx=16)
+        for (p, g) in sorted(archived, key=lambda x: x[1].lower()):
+            row = tk.Frame(frm)
+            row.pack(fill="x", pady=3)
+            tk.Label(row, text=g, font=("Helvetica", 10), anchor="w").pack(side="left", fill="x", expand=True)
+            tk.Button(row, text="Unarchive", font=("Helvetica", 9),
+                      bg=GREEN, fg="white", relief="flat", padx=6, pady=2, cursor="hand2",
+                      command=lambda p2=p, g2=g: (
+                          self._unarchive_goal(p2, g2, rebuild_fn), dlg.destroy()
+                      )).pack(side="right")
+        tk.Button(dlg, text="Close", command=dlg.destroy,
+                  bg="#e5e7eb", fg="#374151", relief="flat", padx=10, pady=4
+                  ).pack(pady=(10, 14))
+
     def _goals_for_project(self, project):
         return sorted(set(t["goal"] for t in load_tasks()
                           if t["goal"] and t["impact_project"] == project))
@@ -413,14 +466,18 @@ class App(ctk.CTk):
         def _sep():
             tk.Frame(bar, bg=BORDER, width=1).pack(side="left", fill="y", padx=8, pady=4)
 
-        # Work-mode toggle switch
-        wm_frame = tk.Frame(bar, bg=FILTER_BG)
-        wm_frame.pack(side="left", padx=(10, 6), pady=8)
-        self._toggle_switch(wm_frame, self._work_mode, rebuild_fn,
-                            bg=FILTER_BG).pack(side="left")
-        tk.Label(wm_frame, text="Work", font=("Helvetica", 9, "bold"),
-                 fg=GREEN if self._work_mode.get() else "#9ca3af",
-                 bg=FILTER_BG).pack(side="left", padx=(4, 0))
+        # Work-mode button
+        def _toggle_work():
+            self._work_mode.set(not self._work_mode.get())
+            rebuild_fn()
+        tk.Button(bar, text="Work",
+                  bg=GREEN if self._work_mode.get() else "#e5e7eb",
+                  fg="white" if self._work_mode.get() else "#6b7280",
+                  relief="flat", font=("Helvetica", 9, "bold"),
+                  padx=8, pady=3, cursor="hand2",
+                  activebackground=GREEN_DARK, activeforeground="white",
+                  command=_toggle_work
+                  ).pack(side="left", padx=(10, 6), pady=8)
 
         _sep()
 
@@ -859,7 +916,7 @@ class App(ctk.CTk):
                       ).pack(side="right", padx=(0, 4))
 
             def _proj_ctx(event, p=proj):
-                self._show_ctx_menu(event, [
+                items = [
                     ("Rename project", lambda: self._rename_dialog(
                         p, "Project",
                         lambda old, new: db_exec(
@@ -871,14 +928,32 @@ class App(ctk.CTk):
                     ("---", None),
                     ("Archive project", lambda: self._archive_project(p, rebuild_fn)),
                     ("Delete project…", lambda: self._delete_project(p)),
-                ])
+                ]
+                if any(pr == p for (pr, _) in self._archived_goals()):
+                    items.insert(2, ("Archived goals…",
+                                     lambda: self._show_archived_goals_dialog(p, rebuild_fn)))
+                self._show_ctx_menu(event, items)
             for w in (hdr, proj_lbl):
                 w.bind("<Button-3>", _proj_ctx)
 
         tk.Frame(proj_frame, bg=BORDER, height=1).pack(fill="x", padx=8)
 
+        if not readonly:
+            has_arch_goals = any(p == proj for (p, _) in self._archived_goals())
+            if has_arch_goals:
+                def _show_arch(p=proj):
+                    self._show_archived_goals_dialog(p, rebuild_fn)
+                tk.Button(hdr, text="archived ▾",
+                          command=_show_arch,
+                          bg="white", fg="#9ca3af", relief="flat", bd=0,
+                          font=("Helvetica", 8), cursor="hand2",
+                          activebackground=GREEN_LITE, activeforeground=GREEN
+                          ).pack(side="right", padx=(0, 8))
+
         # Goals — hide completed goals unless "Show completed" is on
-        goals = sorted(set(t["goal"] for t in all_proj_tasks if t["goal"]))
+        arch_goals = self._archived_goals()
+        goals = sorted(set(t["goal"] for t in all_proj_tasks
+                           if t["goal"] and (proj, t["goal"]) not in arch_goals))
         for goal in goals:
             goal_tasks      = [t for t in all_proj_tasks if t["goal"] == goal]
             real_goal_tasks = [t for t in goal_tasks if t["task"]]
@@ -909,6 +984,13 @@ class App(ctk.CTk):
                  bg="white", anchor="w")
         goal_lbl.pack(side="left")
 
+        done_count  = sum(1 for t in real_tasks if t["task_completed"])
+        total_count = len(real_tasks)
+        if total_count > 0:
+            tk.Label(hdr, text=f"{done_count}/{total_count}",
+                     font=("Helvetica", 9), fg="#9ca3af",
+                     bg="white").pack(side="left", padx=(4, 0))
+
         if not readonly:
             self._icon_btn(
                 hdr, "✏",
@@ -924,8 +1006,8 @@ class App(ctk.CTk):
 
         if not readonly:
             tk.Button(hdr, text="(+task)",
-                      command=lambda p=proj, g=goal: self._open_dialog(
-                          "add_task", {"project": p, "goal": g}, rebuild_fn),
+                      command=lambda p=proj, g=goal, gf=goal_frame:
+                          self._inline_add_task_compact(gf, p, g, rebuild_fn),
                       bg="white", fg="#9ca3af", relief="flat", bd=0,
                       font=("Helvetica", 8), cursor="hand2",
                       activebackground=GREEN_LITE, activeforeground=GREEN
@@ -941,6 +1023,7 @@ class App(ctk.CTk):
                     ("Add task", lambda: self._open_dialog(
                         "add_task", {"project": p, "goal": g}, rebuild_fn)),
                     ("---", None),
+                    ("Archive goal", lambda: self._archive_goal(p, g, rebuild_fn)),
                     ("Delete goal…", lambda: self._delete_goal(p, g)),
                 ])
             for w in (hdr, goal_lbl):
@@ -983,7 +1066,7 @@ class App(ctk.CTk):
 
                 if not completed_mode:
                     def _card_ctx(event, p=proj):
-                        self._show_ctx_menu(event, [
+                        items = [
                             ("Rename project", lambda: self._rename_dialog(
                                 p, "Project",
                                 lambda old, new: db_exec(
@@ -995,10 +1078,16 @@ class App(ctk.CTk):
                             ("---", None),
                             ("Archive project", lambda: self._archive_project(p, rebuild_fn)),
                             ("Delete project…", lambda: self._delete_project(p)),
-                        ])
+                        ]
+                        if any(pr == p for (pr, _) in self._archived_goals()):
+                            items.insert(2, ("Archived goals…",
+                                             lambda: self._show_archived_goals_dialog(p, rebuild_fn)))
+                        self._show_ctx_menu(event, items)
                     card.bind("<Button-3>", _card_ctx)
 
-                goals = sorted(set(t["goal"] for t in proj_tasks if t["goal"]))
+                arch_goals = self._archived_goals()
+                goals = sorted(set(t["goal"] for t in proj_tasks
+                                   if t["goal"] and (proj, t["goal"]) not in arch_goals))
                 for goal in goals:
                     goal_tasks  = [t for t in proj_tasks if t["goal"] == goal]
                     real_gtasks = [t for t in goal_tasks if t["task"]]
@@ -1010,10 +1099,18 @@ class App(ctk.CTk):
                     is_exp  = self._bubble_expanded.get(
                         (proj, goal), self._bubble_global_expand.get())
                     chevron = "▼" if is_exp else "▶"
-                    goal_lbl = tk.Label(card, text=f"{chevron} {goal}",
+                    goal_row = tk.Frame(card, bg=CARD_BG)
+                    goal_row.pack(fill="x", anchor="w", pady=(6, 2))
+                    goal_lbl = tk.Label(goal_row, text=f"{chevron} {goal}",
                                         font=("Helvetica", 10, "bold"),
                                         bg=CARD_BG, fg="#374151", cursor="hand2")
-                    goal_lbl.pack(anchor="w", pady=(6, 2))
+                    goal_lbl.pack(side="left")
+                    done_g  = sum(1 for t in real_gtasks if t["task_completed"])
+                    total_g = len(real_gtasks)
+                    if total_g > 0:
+                        tk.Label(goal_row, text=f"{done_g}/{total_g}",
+                                 font=("Helvetica", 9), fg="#9ca3af",
+                                 bg=CARD_BG).pack(side="left", padx=(4, 0))
 
                     def _toggle_exp(p=proj, g=goal):
                         key = (p, g)
@@ -1032,6 +1129,7 @@ class App(ctk.CTk):
                                 ("Add task", lambda: self._open_dialog(
                                     "add_task", {"project": p, "goal": g}, rebuild_fn)),
                                 ("---", None),
+                                ("Archive goal", lambda: self._archive_goal(p, g, rebuild_fn)),
                                 ("Delete goal…", lambda: self._delete_goal(p, g)),
                             ])
                         goal_lbl.bind("<Button-3>", _glbl_ctx)
@@ -1046,6 +1144,14 @@ class App(ctk.CTk):
                             self._render_task_row(card, t, rebuild_fn, bg=CARD_BG,
                                                  completed_mode=completed_mode,
                                                  compact=True)
+                        if not completed_mode:
+                            tk.Button(card, text="(+task)",
+                                      command=lambda p=proj, g=goal, c=card:
+                                          self._inline_add_task_compact(c, p, g, rebuild_fn),
+                                      bg=CARD_BG, fg="#9ca3af", relief="flat", bd=0,
+                                      font=("Helvetica", 8), cursor="hand2",
+                                      activebackground=GREEN_LITE, activeforeground=GREEN
+                                      ).pack(anchor="w", padx=(16, 0))
 
                 if not completed_mode:
                     tk.Button(card, text="(+goal)",
@@ -1069,7 +1175,9 @@ class App(ctk.CTk):
             ("notes",          "Notes",    22),
         ]
 
-        tasks = [t for t in all_tasks if t["task"]]
+        arch_goals = self._archived_goals()
+        tasks = [t for t in all_tasks if t["task"]
+                 and (t.get("impact_project"), t.get("goal")) not in arch_goals]
         if not show_done:
             tasks = [t for t in tasks if not t["task_completed"]]
         if pri_val != "All":
@@ -2087,14 +2195,18 @@ class App(ctk.CTk):
         def _sep():
             tk.Frame(bar, bg=BORDER, width=1).pack(side="left", fill="y", padx=8, pady=4)
 
-        # Work mode toggle switch
-        wm3 = tk.Frame(bar, bg=FILTER_BG)
-        wm3.pack(side="left", padx=(10, 6), pady=8)
-        self._toggle_switch(wm3, self._work_mode, self._build_tab3,
-                            bg=FILTER_BG).pack(side="left")
-        tk.Label(wm3, text="Work", font=("Helvetica", 9, "bold"),
-                 fg=GREEN if self._work_mode.get() else "#9ca3af",
-                 bg=FILTER_BG).pack(side="left", padx=(4, 0))
+        # Work-mode button
+        def _toggle_work3():
+            self._work_mode.set(not self._work_mode.get())
+            self._build_tab3()
+        tk.Button(bar, text="Work",
+                  bg=GREEN if self._work_mode.get() else "#e5e7eb",
+                  fg="white" if self._work_mode.get() else "#6b7280",
+                  relief="flat", font=("Helvetica", 9, "bold"),
+                  padx=8, pady=3, cursor="hand2",
+                  activebackground=GREEN_DARK, activeforeground="white",
+                  command=_toggle_work3
+                  ).pack(side="left", padx=(10, 6), pady=8)
 
         _sep()
 
@@ -2111,16 +2223,25 @@ class App(ctk.CTk):
 
         _sep()
 
-        # Time window filter
-        tk.Label(bar, text="Period:", bg=FILTER_BG,
+        # Date range filter
+        tk.Label(bar, text="From:", bg=FILTER_BG,
                  font=("Helvetica", 9), fg="#6b7280").pack(side="left", padx=(0, 4), pady=8)
-        for val, label in [("7", "7d"), ("30", "30d"), ("90", "90d"), ("all", "All")]:
-            tk.Radiobutton(bar, text=label, variable=self._t3_time_win,
-                           value=val, indicatoron=0, font=("Helvetica", 9),
-                           bg="#e5e7eb", fg="#374151",
-                           activebackground="#d1d5db", activeforeground="#374151",
-                           selectcolor=GREEN_MED, relief="flat", padx=8, pady=3,
-                           command=self._build_tab3).pack(side="left", padx=(0, 2), pady=8)
+        from_sb = ttk.Spinbox(bar, from_=0, to=3650, width=5,
+                              textvariable=self._t3_from_days,
+                              command=self._build_tab3)
+        from_sb.pack(side="left", padx=(0, 2), pady=8)
+        from_sb.bind("<Return>", lambda _: self._build_tab3())
+        from_sb.bind("<FocusOut>", lambda _: self._build_tab3())
+        tk.Label(bar, text="days ago  To:", bg=FILTER_BG,
+                 font=("Helvetica", 9), fg="#6b7280").pack(side="left", padx=(4, 4), pady=8)
+        to_sb = ttk.Spinbox(bar, from_=0, to=3650, width=5,
+                            textvariable=self._t3_to_days,
+                            command=self._build_tab3)
+        to_sb.pack(side="left", padx=(0, 2), pady=8)
+        to_sb.bind("<Return>", lambda _: self._build_tab3())
+        to_sb.bind("<FocusOut>", lambda _: self._build_tab3())
+        tk.Label(bar, text="days ago", bg=FILTER_BG,
+                 font=("Helvetica", 9), fg="#6b7280").pack(side="left", padx=(4, 0), pady=8)
 
         _sep()
 
@@ -2168,11 +2289,12 @@ class App(ctk.CTk):
         all_done = self._apply_proj_filter(self._apply_work_filter(
             [t for t in load_tasks() if t["task"] and t["task_completed"]]))
 
-        time_win = self._t3_time_win.get()
-        if time_win != "all":
-            cutoff = str(date.today() - timedelta(days=int(time_win)))
-            all_done = [t for t in all_done
-                        if (t.get("selected_date") or t.get("created_date") or "") >= cutoff]
+        from_d = max(0, self._t3_from_days.get())
+        to_d   = max(0, self._t3_to_days.get())
+        cutoff_from = str(date.today() - timedelta(days=from_d))
+        cutoff_to   = str(date.today() - timedelta(days=to_d))
+        all_done = [t for t in all_done
+                    if cutoff_from <= (t.get("selected_date") or t.get("created_date") or "") <= cutoff_to]
 
         pri_val = self._t3_pri_filter.get()
         if pri_val != "All":
@@ -2210,13 +2332,17 @@ class App(ctk.CTk):
 
         bar = tk.Frame(f, bg=FILTER_BG)
         bar.pack(fill="x", padx=8, pady=(8, 6))
-        wm4 = tk.Frame(bar, bg=FILTER_BG)
-        wm4.pack(side="left", padx=(10, 6), pady=8)
-        self._toggle_switch(wm4, self._work_mode, self._build_tab4,
-                            bg=FILTER_BG).pack(side="left")
-        tk.Label(wm4, text="Work", font=("Helvetica", 9, "bold"),
-                 fg=GREEN if self._work_mode.get() else "#9ca3af",
-                 bg=FILTER_BG).pack(side="left", padx=(4, 0))
+        def _toggle_work4():
+            self._work_mode.set(not self._work_mode.get())
+            self._build_tab4()
+        tk.Button(bar, text="Work",
+                  bg=GREEN if self._work_mode.get() else "#e5e7eb",
+                  fg="white" if self._work_mode.get() else "#6b7280",
+                  relief="flat", font=("Helvetica", 9, "bold"),
+                  padx=8, pady=3, cursor="hand2",
+                  activebackground=GREEN_DARK, activeforeground="white",
+                  command=_toggle_work4
+                  ).pack(side="left", padx=(10, 6), pady=8)
 
         all_tasks = self._apply_proj_filter(self._apply_work_filter(
             [t for t in load_tasks() if t["task"]]))
