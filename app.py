@@ -155,12 +155,14 @@ class App(ctk.CTk):
         self._t2_show_done  = tk.BooleanVar(value=False)
         self._t2_view_mode  = tk.StringVar(value="list")
         self._t2_expand_all = tk.BooleanVar(value=True)   # True = expanded
+        self._t2_focus      = None   # (project, goal) tuple, or None
 
         # Tasks for Today state
         self._today_pri_filter = tk.StringVar(value="All")
         self._today_show_done  = tk.BooleanVar(value=False)
         self._today_view_mode  = tk.StringVar(value="bubble")
         self._today_expand_all = tk.BooleanVar(value=True)
+        self._today_focus      = None   # (project, goal) tuple, or None
 
         # Completed Tasks state
         self._t3_view_mode  = tk.StringVar(value="list")
@@ -458,7 +460,7 @@ class App(ctk.CTk):
     # ── Filter / control bar ───────────────────────────────────────────────────
 
     def _build_filter_bar(self, parent, view_var, expand_var,
-                          pri_var, done_var, rebuild_fn):
+                          pri_var, done_var, rebuild_fn, focus_attr=None):
         """Filter + view-mode bar used on My Tasks and Today tabs."""
         bar = tk.Frame(parent, bg=FILTER_BG)
         bar.pack(fill="x", padx=8, pady=(4, 6))
@@ -548,6 +550,8 @@ class App(ctk.CTk):
         for vmode, label in [("list", "List"), ("bubble", "Bubble"), ("table", "Table")]:
             active = (view_var.get() == vmode)
             def set_mode(m=vmode):
+                if focus_attr:
+                    setattr(self, focus_attr, None)
                 view_var.set(m); rebuild_fn()
             tk.Button(view_frame, text=label, command=set_mode,
                       bg=GREEN if active else "#e5e7eb",
@@ -673,6 +677,10 @@ class App(ctk.CTk):
         f = self._tab_frames["My Tasks"]
         f.configure(bg="white")
 
+        canvas = self._tab_canvases["My Tasks"]
+        canvas.unbind("<Left>")
+        canvas.unbind("<Right>")
+
         self._build_filter_bar(
             f,
             view_var   = self._t2_view_mode,
@@ -680,6 +688,7 @@ class App(ctk.CTk):
             pri_var    = self._t2_pri_filter,
             done_var   = self._t2_show_done,
             rebuild_fn = self._build_tab1,
+            focus_attr = "_t2_focus",
         )
 
         all_tasks = self._apply_proj_filter(self._apply_work_filter(load_tasks()))
@@ -689,19 +698,30 @@ class App(ctk.CTk):
             sorted(set(t["impact_project"] for t in all_tasks if t["impact_project"])))
         projects  = self._sort_by_activity(raw_projs, all_tasks, show_done, pri_val)
 
+        seq = self._visible_goal_sequence(all_tasks, projects, show_done)
+        if self._t2_focus not in seq:
+            self._t2_focus = None
+
         if not projects:
             tk.Label(f, text="No projects yet — click '(+project)' below to get started.",
                      bg="white", fg="#9ca3af",
                      font=("Helvetica", 11)).pack(pady=20)
+        elif self._t2_focus is not None:
+            self._render_focus_view(f, all_tasks, projects, show_done, pri_val,
+                                    self._build_tab1, "_t2_focus")
         else:
+            focus_setter = lambda p, g: (setattr(self, "_t2_focus", (p, g)),
+                                         self._build_tab1())
             view = self._t2_view_mode.get()
             if view == "list":
                 self._render_list_view(f, all_tasks, projects,
                                        self._t2_expand_all.get(),
-                                       show_done, pri_val, self._build_tab1)
+                                       show_done, pri_val, self._build_tab1,
+                                       focus_setter=focus_setter)
             elif view == "bubble":
                 self._render_bubble_view(f, all_tasks, projects,
-                                         show_done, pri_val, self._build_tab1)
+                                         show_done, pri_val, self._build_tab1,
+                                         focus_setter=focus_setter)
             else:
                 self._render_table_view(f, all_tasks, show_done, pri_val,
                                         self._build_tab1)
@@ -870,16 +890,17 @@ class App(ctk.CTk):
 
     def _render_list_view(self, parent, all_tasks, projects,
                           expand_all, show_done, pri_val, rebuild_fn,
-                          readonly=False, completed_mode=False):
+                          readonly=False, completed_mode=False, focus_setter=None):
         for proj in projects:
             proj_tasks = [t for t in all_tasks if t["impact_project"] == proj]
             self._render_list_proj(parent, proj, proj_tasks,
                                    expand_all, show_done, pri_val, rebuild_fn,
-                                   readonly=readonly, completed_mode=completed_mode)
+                                   readonly=readonly, completed_mode=completed_mode,
+                                   focus_setter=focus_setter)
 
     def _render_list_proj(self, parent, proj, all_proj_tasks,
                           expand_all, show_done, pri_val, rebuild_fn,
-                          readonly=False, completed_mode=False):
+                          readonly=False, completed_mode=False, focus_setter=None):
         # Each project gets its own container so inline forms appear in-context
         proj_frame = tk.Frame(parent, bg="white")
         proj_frame.pack(fill="x")
@@ -964,11 +985,12 @@ class App(ctk.CTk):
 
             self._render_list_goal(proj_frame, proj, goal, goal_tasks,
                                    expand_all, show_done, pri_val, rebuild_fn,
-                                   readonly=readonly, completed_mode=completed_mode)
+                                   readonly=readonly, completed_mode=completed_mode,
+                                   focus_setter=focus_setter)
 
     def _render_list_goal(self, parent, proj, goal, all_goal_tasks,
                           expand_all, show_done, pri_val, rebuild_fn,
-                          readonly=False, completed_mode=False):
+                          readonly=False, completed_mode=False, focus_setter=None):
         real_tasks = [t for t in all_goal_tasks if t["task"]]
 
         # Each goal gets its own container so inline forms appear in-context
@@ -1001,6 +1023,11 @@ class App(ctk.CTk):
                         (new, old, p)),
                     self._build_tab1)
             ).pack(side="left", padx=(2, 0))
+
+        if focus_setter is not None:
+            self._icon_btn(hdr, "🔍",
+                           lambda p=proj, g=goal: focus_setter(p, g),
+                           bg="white").pack(side="left", padx=(2, 0))
 
         tk.Frame(hdr, bg="white").pack(side="left", fill="x", expand=True)
 
@@ -1046,7 +1073,8 @@ class App(ctk.CTk):
     # ── Bubble view ────────────────────────────────────────────────────────────
 
     def _render_bubble_view(self, parent, all_tasks, projects,
-                            show_done, pri_val, rebuild_fn, completed_mode=False):
+                            show_done, pri_val, rebuild_fn, completed_mode=False,
+                            focus_setter=None):
         COLS = 3
         for row_start in range(0, len(projects), COLS):
             row_projs = projects[row_start:row_start + COLS]
@@ -1111,6 +1139,10 @@ class App(ctk.CTk):
                         tk.Label(goal_row, text=f"{done_g}/{total_g}",
                                  font=("Helvetica", 9), fg="#9ca3af",
                                  bg=CARD_BG).pack(side="left", padx=(4, 0))
+                    if focus_setter is not None:
+                        self._icon_btn(goal_row, "🔍",
+                                       lambda p=proj, g=goal: focus_setter(p, g),
+                                       bg=CARD_BG).pack(side="left", padx=(4, 0))
 
                     def _toggle_exp(p=proj, g=goal):
                         key = (p, g)
@@ -1406,6 +1438,99 @@ class App(ctk.CTk):
                 ])
             for w in (outer, row):
                 w.bind("<Button-3>", _done_ctx)
+
+    # ── Focus mode (zoom into a single goal, page through goals) ───────────────
+
+    def _visible_goal_sequence(self, all_tasks, projects, show_done):
+        arch_goals = self._archived_goals()
+        seq = []
+        for proj in projects:
+            proj_tasks = [t for t in all_tasks if t["impact_project"] == proj]
+            goals = sorted(set(t["goal"] for t in proj_tasks
+                               if t["goal"] and (proj, t["goal"]) not in arch_goals))
+            for goal in goals:
+                goal_tasks  = [t for t in proj_tasks if t["goal"] == goal]
+                real_gtasks = [t for t in goal_tasks if t["task"]]
+                if real_gtasks and not show_done and all(t["task_completed"] for t in real_gtasks):
+                    continue
+                seq.append((proj, goal))
+        return seq
+
+    def _render_focus_view(self, parent, all_tasks, projects, show_done, pri_val,
+                           rebuild_fn, focus_attr, readonly=False, completed_mode=False):
+        seq = self._visible_goal_sequence(all_tasks, projects, show_done)
+        if not seq:
+            tk.Label(parent, text="No goals to focus on.", bg="white",
+                     fg="#9ca3af", font=("Helvetica", 11)).pack(pady=20)
+            tk.Button(parent, text="◀ Back to overview",
+                      command=lambda: (setattr(self, focus_attr, None), rebuild_fn()),
+                      bg=FILTER_BG, fg="#374151", relief="flat", cursor="hand2"
+                      ).pack()
+            return
+
+        proj, goal = getattr(self, focus_attr)
+        idx, total = seq.index((proj, goal)), len(seq)
+
+        bar = tk.Frame(parent, bg=CARD_BG, bd=1, relief="groove")
+        bar.pack(fill="x", padx=8, pady=(8, 4))
+
+        tk.Button(bar, text="◀ Back to overview",
+                  command=lambda: (setattr(self, focus_attr, None), rebuild_fn()),
+                  bg=FILTER_BG, fg="#374151", relief="flat", font=("Helvetica", 9, "bold"),
+                  padx=8, pady=3, cursor="hand2").pack(side="left", padx=8, pady=6)
+
+        def _go(delta):
+            new_idx = idx + delta
+            if 0 <= new_idx < total:
+                setattr(self, focus_attr, seq[new_idx])
+                rebuild_fn()
+
+        nav = tk.Frame(bar, bg=CARD_BG)
+        nav.pack(side="right", padx=8, pady=6)
+        tk.Button(nav, text="◀ Prev", command=lambda: _go(-1),
+                  state=("disabled" if idx == 0 else "normal"),
+                  bg=FILTER_BG, fg="#374151", relief="flat", cursor="hand2",
+                  padx=8, pady=3).pack(side="left")
+        tk.Label(nav, text=f"{proj} · {goal}   (goal {idx + 1} of {total})",
+                 font=("Helvetica", 10, "bold"), fg=GREEN, bg=CARD_BG
+                 ).pack(side="left", padx=10)
+        tk.Button(nav, text="Next ▶", command=lambda: _go(1),
+                  state=("disabled" if idx == total - 1 else "normal"),
+                  bg=FILTER_BG, fg="#374151", relief="flat", cursor="hand2",
+                  padx=8, pady=3).pack(side="left")
+
+        body = tk.Frame(parent, bg="white")
+        body.pack(fill="both", expand=True, padx=24, pady=(4, 12))
+
+        goal_tasks = [t for t in all_tasks
+                     if t["impact_project"] == proj and t["goal"] == goal]
+        display = [t for t in goal_tasks if t["task"]]
+        if not show_done:
+            display = [t for t in display if not t["task_completed"]]
+        if pri_val != "All":
+            display = [t for t in display if t["priority"] == pri_val]
+
+        if not display:
+            tk.Label(body, text="No tasks match the current filters for this goal.",
+                     fg="#9ca3af", bg="white", font=("Helvetica", 10)).pack(pady=12)
+        else:
+            for t in display:
+                self._render_task_row(body, t, rebuild_fn, bg="white",
+                                      completed_mode=completed_mode)
+
+        if not readonly and not completed_mode:
+            tk.Button(body, text="(+task)",
+                      command=lambda: self._inline_add_task_compact(
+                          body, proj, goal, rebuild_fn),
+                      bg="white", fg="#9ca3af", relief="flat", bd=0,
+                      font=("Helvetica", 8), cursor="hand2",
+                      activebackground=GREEN_LITE, activeforeground=GREEN
+                      ).pack(anchor="w", pady=(8, 0))
+
+        canvas = self._tab_canvases["My Tasks" if focus_attr == "_t2_focus" else "Tasks for Today"]
+        canvas.bind("<Left>",  lambda e: _go(-1))
+        canvas.bind("<Right>", lambda e: _go(1))
+        canvas.focus_set()
 
     # ── Inline edit panel (includes delete) ────────────────────────────────────
 
@@ -2134,6 +2259,10 @@ class App(ctk.CTk):
         f = self._tab_frames["Tasks for Today"]
         f.configure(bg="white")
 
+        canvas = self._tab_canvases["Tasks for Today"]
+        canvas.unbind("<Left>")
+        canvas.unbind("<Right>")
+
         self._build_filter_bar(
             f,
             view_var   = self._today_view_mode,
@@ -2141,6 +2270,7 @@ class App(ctk.CTk):
             pri_var    = self._today_pri_filter,
             done_var   = self._today_show_done,
             rebuild_fn = self._build_tab2,
+            focus_attr = "_today_focus",
         )
 
         all_tasks = self._apply_proj_filter(self._apply_work_filter([
@@ -2154,22 +2284,32 @@ class App(ctk.CTk):
             sorted(set(t["impact_project"] for t in all_tasks if t["impact_project"])))
         projects  = self._sort_by_activity(raw_projs, all_tasks, show_done, pri_val)
 
+        seq = self._visible_goal_sequence(all_tasks, projects, show_done)
+        if self._today_focus not in seq:
+            self._today_focus = None
+
         if not all_tasks:
             tk.Label(f, text="No tasks selected for today.",
                      font=("Helvetica", 13), bg="white").pack(pady=20)
             tk.Label(f,
                      text="Go to 'My Tasks' and click '+ Today' on any task.",
                      fg="#888", bg="white").pack()
+        elif self._today_focus is not None:
+            self._render_focus_view(f, all_tasks, projects, show_done, pri_val,
+                                    self._build_tab2, "_today_focus", readonly=True)
         else:
+            focus_setter = lambda p, g: (setattr(self, "_today_focus", (p, g)),
+                                         self._build_tab2())
             view = self._today_view_mode.get()
             if view == "list":
                 self._render_list_view(f, all_tasks, projects,
                                        self._today_expand_all.get(),
                                        show_done, pri_val, self._build_tab2,
-                                       readonly=True)
+                                       readonly=True, focus_setter=focus_setter)
             elif view == "bubble":
                 self._render_bubble_view(f, all_tasks, projects,
-                                         show_done, pri_val, self._build_tab2)
+                                         show_done, pri_val, self._build_tab2,
+                                         focus_setter=focus_setter)
             else:
                 self._render_table_view(f, all_tasks, show_done, pri_val,
                                         self._build_tab2)
